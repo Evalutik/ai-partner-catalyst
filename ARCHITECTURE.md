@@ -166,22 +166,61 @@ Complex tasks require multiple DOM fetches and actions. The agent operates in a 
 
 ```
 ai-partner-catalyst/
+├── .env.example              # Environment template (copy to .env)
+├── .gitignore                # Prevents committing secrets
 ├── ARCHITECTURE.md           # This file
 ├── README.md                 # User-facing project overview
 │
 ├── extension/                # Chrome Extension (Manifest V3)
 │   ├── public/
-│   │   └── manifest.json     # Extension config
-│   └── src/
-│       ├── background/       # Service worker: hotkey, message routing
-│       ├── content/          # DOM extraction + action execution
-│       └── popup/            # React UI + ElevenLabs SDK
+│   │   ├── manifest.json     # Extension permissions, hotkey, scripts
+│   │   └── popup.html        # HTML entry point for React popup
+│   ├── src/
+│   │   ├── background/
+│   │   │   └── index.ts      # Service worker: hotkey listener, message router
+│   │   ├── content/
+│   │   │   └── index.ts      # Injected into pages: DOM extraction, actions
+│   │   └── popup/
+│   │       ├── index.tsx     # React entry point
+│   │       ├── App.tsx       # Main UI component
+│   │       ├── VoiceAgent.tsx # ElevenLabs SDK integration
+│   │       └── index.css     # Popup styles
+│   ├── package.json          # Node dependencies
+│   ├── tsconfig.json         # TypeScript config
+│   ├── vite.config.ts        # Build config
+│   └── .env                  # Local secrets (NOT committed)
 │
 ├── backend/                  # Cloud Run API (Python/FastAPI)
-│   └── (Gemini integration, prompt templates)
+│   ├── main.py               # FastAPI app entry
+│   ├── requirements.txt      # Python dependencies
+│   ├── Dockerfile            # Container config
+│   └── .env                  # Local secrets (NOT committed)
 │
 └── shared/                   # Shared types (if needed)
 ```
+
+### Environment Setup
+
+> [!CAUTION]
+> **Never commit `.env` files!** They contain API keys that could be stolen.
+
+**For each team member:**
+
+1. Copy the template:
+   ```bash
+   cp .env.example extension/.env
+   cp .env.example backend/.env
+   ```
+
+2. Fill in your personal API keys:
+   - `VITE_ELEVENLABS_AGENT_ID` — from [ElevenLabs dashboard](https://elevenlabs.io/app/conversational-ai)
+   - `GOOGLE_CLOUD_PROJECT` — from [Google Cloud Console](https://console.cloud.google.com)
+
+3. The `.gitignore` will prevent these from being committed.
+
+**How secrets are used:**
+- Extension uses `VITE_` prefix variables (Vite exposes these to frontend)
+- Backend uses regular env vars (loaded via `python-dotenv`)
 
 ### Component Responsibilities
 
@@ -256,6 +295,14 @@ Tasks:
 - Set up Vite for extension building
 - Create empty React popup in `extension/src/popup/`
 
+> **✅ Step 1.1 Complete** (Dec 24, 2024)
+> - Manifest V3 with hotkey and permissions configured
+> - Vite + React + TypeScript + Tailwind CSS build pipeline working
+> - Background service worker handles hotkey and message routing
+> - Content script ready with placeholder functions for Step 2
+> - Professional dark theme popup UI with Inter font
+> - Build output in `extension/dist/` ready to load in Chrome
+![Step 1.1 Popup Screenshot](docs/assets/image.png)
 ---
 
 **Step 1.2: ElevenLabs Agent**

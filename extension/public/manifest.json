@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Aeyes",
   "version": "0.1.0",
-  "description": "Voice-controlled browser for visually impaired users",
+  "description": "Voice-controlled browser assistant for visually impaired users",
   "permissions": [
     "activeTab",
     "scripting",
@@ -11,16 +11,19 @@
   "commands": {
     "_execute_action": {
       "suggested_key": {
-        "default": "Alt+V"
+        "default": "Alt+V",
+        "mac": "Alt+V"
       },
-      "description": "Activate voice assistant"
+      "description": "Activate Aeyes voice assistant"
     }
   },
   "action": {
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_title": "Aeyes - Voice Assistant"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
@@ -29,7 +32,8 @@
       ],
       "js": [
         "content.js"
-      ]
+      ],
+      "run_at": "document_idle"
     }
   ]
 }
