@@ -1,4 +1,3 @@
 # ai-partner-catalyst
 
-
-123 123 123 does it work??
+ this file will be used for final documenation, see ARCHITECTURE.md for development
