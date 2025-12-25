@@ -22,7 +22,7 @@ export default function VoiceAgent({
     const [status, setStatus] = useState<Status>('idle');
     const [error, setError] = useState<string | null>(null);
     const [lastTranscript, setLastTranscript] = useState('');
-    const [audioLevel, setAudioLevel] = useState<number[]>(new Array(12).fill(0));
+    const [audioLevel, setAudioLevel] = useState<number[]>(new Array(16).fill(0));
     const [needsPermission, setNeedsPermission] = useState(false);
     const [hasAttemptedAutoStart, setHasAttemptedAutoStart] = useState(false);
 
@@ -58,7 +58,6 @@ export default function VoiceAgent({
         }
     }, [speechError, updateStatus]);
 
-    // Audio visualization with more bars
     const startAudioVisualization = useCallback(async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -82,16 +81,15 @@ export default function VoiceAgent({
                 analyserRef.current.getByteFrequencyData(dataArray);
 
                 const levels: number[] = [];
-                const bandSize = Math.floor(dataArray.length / 12);
-                for (let i = 0; i < 12; i++) {
+                const bandSize = Math.floor(dataArray.length / 16);
+                for (let i = 0; i < 16; i++) {
                     const start = i * bandSize;
                     let sum = 0;
                     for (let j = 0; j < bandSize; j++) {
                         sum += dataArray[start + j];
                     }
                     const avg = sum / bandSize / 255;
-                    // Add some minimum height and smoothing
-                    levels.push(Math.max(0.1, Math.pow(avg, 0.8) * 1.2));
+                    levels.push(Math.max(0.15, Math.pow(avg, 0.7)));
                 }
 
                 setAudioLevel(levels);
@@ -102,8 +100,7 @@ export default function VoiceAgent({
             setNeedsPermission(false);
             setError(null);
             return true;
-        } catch (err) {
-            console.error('[VoiceAgent] Audio visualization error:', err);
+        } catch {
             setNeedsPermission(true);
             return false;
         }
@@ -123,10 +120,9 @@ export default function VoiceAgent({
             streamRef.current = null;
         }
         analyserRef.current = null;
-        setAudioLevel(new Array(12).fill(0));
+        setAudioLevel(new Array(16).fill(0));
     }, []);
 
-    // Auto-start
     useEffect(() => {
         if (autoStart && !hasAttemptedAutoStart && isSupported) {
             setHasAttemptedAutoStart(true);
@@ -139,13 +135,10 @@ export default function VoiceAgent({
         return () => stopAudioVisualization();
     }, [stopAudioVisualization]);
 
-    // Silence detection
     useEffect(() => {
         if (!transcript || processingRef.current) return;
 
-        if (silenceTimeoutRef.current) {
-            clearTimeout(silenceTimeoutRef.current);
-        }
+        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
 
         if (transcript.length > lastTranscript.length) {
             silenceTimeoutRef.current = window.setTimeout(async () => {
@@ -157,9 +150,7 @@ export default function VoiceAgent({
         }
 
         return () => {
-            if (silenceTimeoutRef.current) {
-                clearTimeout(silenceTimeoutRef.current);
-            }
+            if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
         };
     }, [transcript, lastTranscript]);
 
@@ -179,27 +170,14 @@ export default function VoiceAgent({
             const audioUrl = await getAudioUrl(response.response);
             await playAudio(audioUrl);
 
-            if (response.actions?.length) {
-                for (const action of response.actions) {
-                    await executeAction(action);
-                }
-            }
-
             updateStatus('listening');
         } catch (err) {
-            console.error('[VoiceAgent] Error:', err);
-            setError(err instanceof Error ? err.message : 'Processing failed');
+            setError(err instanceof Error ? err.message : 'Failed');
             updateStatus('idle');
         } finally {
             processingRef.current = false;
         }
     }, [transcript, onTranscript, onResponse, updateStatus]);
-
-    const executeAction = async (action: { type: string; target?: string; value?: string }) => {
-        return new Promise<void>((resolve) => {
-            chrome.runtime.sendMessage({ type: 'EXECUTE_ACTION', action }, () => resolve());
-        });
-    };
 
     const openPermissionPage = useCallback(() => {
         chrome.tabs.create({ url: chrome.runtime.getURL('permission.html') });
@@ -208,7 +186,6 @@ export default function VoiceAgent({
     const handleStart = useCallback(async () => {
         setError(null);
         setLastTranscript('');
-
         const success = await startAudioVisualization();
         if (success) {
             startListening();
@@ -220,107 +197,98 @@ export default function VoiceAgent({
         stopListening();
         stopAudioVisualization();
         updateStatus('idle');
-        if (silenceTimeoutRef.current) {
-            clearTimeout(silenceTimeoutRef.current);
-        }
+        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
     }, [stopListening, stopAudioVisualization, updateStatus]);
 
     const isActive = status !== 'idle';
 
+    const getButtonClass = () => {
+        switch (status) {
+            case 'listening': return 'btn-voice btn-voice-listening';
+            case 'processing': return 'btn-voice btn-voice-processing';
+            case 'speaking': return 'btn-voice btn-voice-speaking';
+            default: return 'btn-voice btn-voice-idle';
+        }
+    };
+
+    const getButtonText = () => {
+        switch (status) {
+            case 'listening': return 'Listening...';
+            case 'processing': return 'Thinking...';
+            case 'speaking': return 'Speaking...';
+            default: return 'Start';
+        }
+    };
+
+    const getStatusClass = () => {
+        switch (status) {
+            case 'listening': return 'status-listening';
+            case 'processing': return 'status-processing';
+            case 'speaking': return 'status-speaking';
+            default: return 'status-idle';
+        }
+    };
+
     if (!isSupported) {
-        return (
-            <div className="glass-card p-4 border-error/50">
-                <p className="text-sm text-error text-center">
-                    Speech recognition not supported in this browser.
-                </p>
-            </div>
-        );
+        return <div className="error-text">Speech recognition not supported</div>;
     }
 
     return (
-        <div className="flex flex-col items-center gap-4">
-            {/* Audio Visualizer - Sleek bars */}
-            <div className="w-full glass-card p-4 flex items-end justify-center gap-1 h-16">
+        <div className="flex flex-col gap-3">
+            {/* Audio Visualizer - No frame, just bars */}
+            <div className="flex items-end justify-center gap-0.5 h-8">
                 {audioLevel.map((level, i) => (
                     <div
                         key={i}
-                        className="audio-bar origin-bottom"
-                        style={{
-                            height: `${Math.max(8, level * 100)}%`,
-                            opacity: 0.6 + level * 0.4,
-                            animationDelay: `${i * 50}ms`
-                        }}
+                        className={`audio-bar ${status === 'idle' ? 'audio-bar-idle' : ''}`}
+                        style={{ height: `${Math.max(12, level * 100)}%` }}
                     />
                 ))}
             </div>
 
-            {/* Microphone Button */}
+            {/* Main Button */}
             <button
                 onClick={isActive ? handleStop : handleStart}
-                className={isActive ? 'btn-listening' : 'btn-primary'}
-                aria-label={isActive ? 'Stop listening' : 'Start listening'}
+                className={getButtonClass()}
             >
-                <MicrophoneIcon isActive={isActive} />
-                <span>
-                    {status === 'idle' && 'Start Listening'}
-                    {status === 'listening' && 'Listening...'}
-                    {status === 'processing' && 'Thinking...'}
-                    {status === 'speaking' && 'Speaking...'}
-                </span>
+                <MicIcon />
+                <span>{getButtonText()}</span>
             </button>
 
-            {/* Live Transcript */}
-            {isListening && (interimTranscript || transcript) && (
-                <div className="w-full glass-card p-3 border-l-2 border-accent animate-fade-in">
-                    <span className="text-[10px] font-medium uppercase tracking-wider text-white/40">
-                        Hearing...
-                    </span>
-                    <p className="text-sm text-white/80 mt-1">
+            {/* Live Transcript - Shown during listening */}
+            {isListening && (interimTranscript || transcript.slice(lastTranscript.length)) && (
+                <div className="animate-fade-in">
+                    <span className={`status-text ${getStatusClass()}`}>Hearing</span>
+                    <p className="transcript-text mt-1">
                         {transcript.slice(lastTranscript.length)}
-                        <span className="text-white/40">{interimTranscript}</span>
+                        <span className="transcript-interim">{interimTranscript}</span>
                     </p>
                 </div>
             )}
 
             {/* Permission Request */}
             {needsPermission && (
-                <div className="w-full glass-card p-4 text-center animate-slide-up">
-                    <div className="text-3xl mb-2">🎤</div>
-                    <p className="text-sm text-white/60 mb-3">
-                        Microphone access needed for voice commands
+                <div className="permission-card animate-fade-in">
+                    <p className="text-xs text-[var(--color-text-secondary)] mb-3">
+                        Microphone access required
                     </p>
-                    <button
-                        onClick={openPermissionPage}
-                        className="btn-primary text-sm"
-                    >
-                        Grant Permission
+                    <button onClick={openPermissionPage} className="permission-btn">
+                        Grant Access
                     </button>
                 </div>
             )}
 
-            {/* Error Display */}
+            {/* Error */}
             {error && !needsPermission && (
-                <div className="w-full glass-card p-3 border border-error/50 animate-fade-in">
-                    <p className="text-sm text-error text-center">{error}</p>
-                </div>
+                <p className="error-text animate-fade-in">{error}</p>
             )}
         </div>
     );
 }
 
-function MicrophoneIcon({ isActive }: { isActive: boolean }) {
+function MicIcon() {
     return (
-        <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className={isActive ? 'animate-mic-pulse' : ''}
-        >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
             <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
             <line x1="12" x2="12" y1="19" y2="22" />
