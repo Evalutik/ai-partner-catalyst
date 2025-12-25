@@ -12,7 +12,9 @@ export default defineConfig({
             closeBundle() {
                 // Copy static files to dist
                 copyFileSync('public/manifest.json', 'dist/manifest.json');
-                copyFileSync('public/popup.html', 'dist/popup.html');
+                copyFileSync('public/sidepanel.html', 'dist/sidepanel.html');
+                copyFileSync('public/permission.html', 'dist/permission.html');
+                copyFileSync('public/permission.js', 'dist/permission.js');
             }
         }
     ],
@@ -20,10 +22,10 @@ export default defineConfig({
     build: {
         outDir: 'dist',
         emptyDirBeforeWrite: true,
-        cssCodeSplit: false, // Bundle CSS into popup.css
+        cssCodeSplit: false,
         rollupOptions: {
             input: {
-                popup: resolve(__dirname, 'src/popup/index.tsx'),
+                sidepanel: resolve(__dirname, 'src/sidepanel/index.tsx'),
                 background: resolve(__dirname, 'src/background/index.ts'),
                 content: resolve(__dirname, 'src/content/index.ts'),
             },

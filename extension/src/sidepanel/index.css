@@ -1,0 +1,353 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
+:root {
+  --bg-primary: #0f0f14;
+  --bg-secondary: #1a1a24;
+  --bg-tertiary: #252532;
+  --text-primary: #f0f0f5;
+  --text-secondary: #9090a0;
+  --accent: #6c5ce7;
+  --accent-hover: #8577ed;
+  --success: #00d26a;
+  --error: #ff5757;
+  --radius: 12px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+#root {
+  height: 100%;
+}
+
+/* Container - full height for side panel */
+.container {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Header */
+.header {
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+
+.subtitle {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin-top: 2px;
+}
+
+/* Voice Section */
+.voice-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.voice-agent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+/* Audio Visualizer */
+.audio-visualizer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 4px;
+  height: 50px;
+  width: 100%;
+  padding: 10px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+}
+
+.audio-bar {
+  width: 8px;
+  min-height: 4px;
+  background: linear-gradient(to top, var(--accent), var(--accent-hover));
+  border-radius: 4px;
+  transition: height 0.05s ease-out;
+}
+
+/* Mic Button */
+.mic-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: var(--radius);
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: 100%;
+  max-width: 180px;
+}
+
+.mic-button:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.mic-button.listening {
+  background: var(--success);
+  animation: pulse 1.5s infinite;
+}
+
+.mic-button.processing {
+  background: var(--accent);
+  opacity: 0.8;
+}
+
+.mic-button.speaking {
+  background: var(--accent-hover);
+}
+
+@keyframes pulse {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 210, 106, 0.4);
+  }
+
+  50% {
+    box-shadow: 0 0 0 10px rgba(0, 210, 106, 0);
+  }
+}
+
+.mic-icon {
+  flex-shrink: 0;
+}
+
+.mic-icon.active {
+  animation: mic-pulse 1s infinite;
+}
+
+@keyframes mic-pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* Transcript Preview */
+.transcript-preview {
+  background: var(--bg-secondary);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  width: 100%;
+  min-height: 40px;
+  border-left: 3px solid var(--accent);
+}
+
+.transcript-preview .interim {
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+/* Permission Request */
+.permission-request {
+  background: var(--bg-secondary);
+  padding: 14px;
+  border-radius: var(--radius);
+  text-align: center;
+  width: 100%;
+}
+
+.permission-request p {
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  font-size: 0.85rem;
+}
+
+.permission-btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.permission-btn:hover {
+  background: var(--accent-hover);
+}
+
+/* Status Section */
+.status-section {
+  background: var(--bg-secondary);
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  flex-shrink: 0;
+}
+
+.status-section.listening {
+  border-left: 3px solid var(--success);
+}
+
+.status-section.processing {
+  border-left: 3px solid var(--accent);
+}
+
+.status-section.speaking {
+  border-left: 3px solid var(--accent-hover);
+}
+
+.status-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.status-content {
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+/* Messages Container - Scrollable */
+.messages-container {
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.messages-scroll {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.messages-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.messages-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messages-scroll::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+}
+
+.message {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
+.message.user {
+  border-left: 2px solid var(--text-secondary);
+}
+
+.message.agent {
+  border-left: 2px solid var(--accent);
+}
+
+.message-label {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+
+.message-text {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.message.agent .message-text {
+  color: var(--accent-hover);
+}
+
+/* Error Message */
+.error-message {
+  background: rgba(255, 87, 87, 0.15);
+  border: 1px solid var(--error);
+  color: var(--error);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  font-size: 0.8rem;
+  text-align: center;
+  width: 100%;
+}
+
+/* Footer */
+.footer {
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  flex-shrink: 0;
+  padding-top: 4px;
+}
+
+.kbd {
+  display: inline-block;
+  background: var(--bg-secondary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'SF Mono', Consolas, monospace;
+  font-size: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}

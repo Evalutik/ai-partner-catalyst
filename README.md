@@ -1,52 +1,71 @@
-# ai-partner-catalyst
+# Aeyes - Voice Browser Assistant
 
-This file will be used for final documentation. See `ARCHITECTURE.md` for development details.
+> Voice-controlled browser extension for visually impaired users. Speak your goal, the AI agent acts.
 
----
+**AI Partner Catalyst Hackathon - ElevenLabs Challenge**
 
-## Developer Setup
+## Features
 
-### Prerequisites
+- 🎤 **Voice Control** — Speak naturally to browse the web
+- 🔊 **High-Quality Voice** — ElevenLabs TTS for clear audio feedback
+- 📌 **Persistent Side Panel** — Stays open during navigation
+- 🧠 **AI-Powered** — Gemini understands intent and plans actions
 
-- Node.js 18+
-- npm
-- Chrome browser
+## Quick Start
 
-### Quick Start
+### 1. Backend Setup
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-org/ai-partner-catalyst.git
-cd ai-partner-catalyst
+cd backend
+python -m venv venv
+.\venv\Scripts\pip install -r requirements.txt   # Windows
+# source venv/bin/pip install -r requirements.txt  # Mac/Linux
 
-# 2. Install extension dependencies
+# Get ElevenLabs API key from: https://elevenlabs.io/app/settings/api-keys
+echo ELEVENLABS_API_KEY=your_key_here > .env
+
+.\venv\Scripts\python main.py  # Backend runs at localhost:8000
+```
+
+### 2. Extension Setup
+
+```bash
 cd extension
 npm install
-
-# 3. Build the extension
 npm run build
-
-# 4. Load in Chrome
-# - Open chrome://extensions
-# - Enable "Developer mode" (top right)
-# - Click "Load unpacked"
-# - Select the extension/dist folder
 ```
 
-### Development
+### 3. Load in Chrome
 
-```bash
-# Watch mode (auto-rebuild on changes)
-cd extension
-npm run dev
-```
+1. Open `chrome://extensions`
+2. Enable "Developer mode"
+3. Click "Load unpacked" → select `extension/dist`
 
-After making changes, click the refresh icon on the extension card in `chrome://extensions`.
+### 4. Use
 
-### Hotkey
+1. Press **Alt+V** → Side Panel opens
+2. Grant microphone permission
+3. Say "Hello" → Agent responds!
 
-Press **Alt+V** to open the Aeyes popup.
+## Documentation
 
----
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for full technical documentation including:
+- System architecture diagrams
+- Repository structure
+- Implementation plan
+- Demo scenarios
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for full technical documentation.
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| UI | Chrome Side Panel API |
+| STT | Web Speech API (Chrome native) |
+| TTS | ElevenLabs REST API |
+| LLM | Gemini 2.0 Flash |
+| Backend | FastAPI (Python) |
+| Extension | Manifest V3 + React + Vite |
+
+## License
+
+MIT

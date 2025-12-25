@@ -6,20 +6,20 @@
   "permissions": [
     "activeTab",
     "scripting",
-    "storage"
+    "storage",
+    "sidePanel"
   ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "commands": {
-    "_execute_action": {
+    "toggle-side-panel": {
       "suggested_key": {
         "default": "Alt+V",
         "mac": "Alt+V"
       },
-      "description": "Activate Aeyes voice assistant"
+      "description": "Toggle Aeyes voice assistant"
     }
-  },
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "Aeyes - Voice Assistant"
   },
   "background": {
     "service_worker": "background.js",

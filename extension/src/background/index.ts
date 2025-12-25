@@ -1,20 +1,29 @@
-// Background service worker - listens for hotkey (Alt+V) and routes messages
+// Background service worker - handles hotkey and message routing
 
-// Handle hotkey command
+// Open side panel when command is triggered
 chrome.commands.onCommand.addListener((command: string) => {
-    if (command === '_execute_action') {
-        // Alt+V pressed - Chrome automatically opens popup for _execute_action
-        console.log('[Aeyes] Hotkey activated');
+    if (command === 'toggle-side-panel') {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs[0]?.id) {
+                chrome.sidePanel.open({ tabId: tabs[0].id });
+            }
+        });
     }
 });
 
-// Message router between popup and content script
+// Also open side panel when extension icon is clicked
+chrome.action?.onClicked?.addListener((tab) => {
+    if (tab.id) {
+        chrome.sidePanel.open({ tabId: tab.id });
+    }
+});
+
+// Message router between side panel and content scripts
 chrome.runtime.onMessage.addListener(
     (message: { type: string;[key: string]: unknown }, _sender, sendResponse) => {
         console.log('[Aeyes Background] Message:', message.type);
 
         if (message.type === 'EXTRACT_DOM') {
-            // Forward to content script in active tab
             chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                 if (tabs[0]?.id) {
                     chrome.tabs.sendMessage(tabs[0].id, message, sendResponse);
@@ -22,11 +31,10 @@ chrome.runtime.onMessage.addListener(
                     sendResponse({ error: 'No active tab' });
                 }
             });
-            return true; // Keep channel open for async response
+            return true;
         }
 
         if (message.type === 'EXECUTE_ACTION') {
-            // Forward action to content script
             chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                 if (tabs[0]?.id) {
                     chrome.tabs.sendMessage(tabs[0].id, message, sendResponse);
