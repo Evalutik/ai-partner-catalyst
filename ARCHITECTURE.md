@@ -277,19 +277,19 @@ This step creates the voice interface. User opens the Side Panel, speaks, and he
 
 **Why dedicated permission page?** Chrome extensions can't request microphone permission directly from Side Panel — the browser needs a full page context. We open a tab, user grants permission "Always allow", and it applies to the entire extension.
 
-**Tasks completed:**
 - Created custom `useSpeechRecognition` hook with error handling
-- Implemented audio level visualizer (8-bar frequency display)
+- Implemented audio level visualizer (12-bar frequency display)
 - Auto-start listening when Side Panel opens
 - Backend `/speak` endpoint calls ElevenLabs TTS, returns audio stream
 - Backend `/conversation` endpoint (echo for testing, Gemini in Step 2)
 - Scrollable message history in fixed-height panel
+- Modern UI with Tailwind CSS: glassmorphism, gradient buttons, micro-animations
 
 ---
 
-**Step 1.3: Backend setup** (Partial)
+**Step 1.3: Backend setup** ✓
 
-The backend hosts our Gemini calls and ElevenLabs TTS. Currently running locally with echo responses — full Gemini integration comes in Step 2.1.
+The backend hosts Gemini calls and ElevenLabs TTS. Running locally with echo responses for now — full Gemini integration comes in Step 2.2.
 
 | What | Details |
 |------|---------|
@@ -297,14 +297,22 @@ The backend hosts our Gemini calls and ElevenLabs TTS. Currently running locally
 | **Language** | Python 3.10+ |
 | **Framework** | [FastAPI](https://fastapi.tiangolo.com/) with async support |
 | **Hosting** | Local (localhost:8000) now, Google Cloud Run for production |
+| **Docs** | [FastAPI Tutorial](https://fastapi.tiangolo.com/tutorial/), [ElevenLabs Python](https://github.com/elevenlabs/elevenlabs-python) |
 
 **Current endpoints:**
 
 ```python
 POST /conversation  # Receives transcript, returns response (echo now, Gemini later)
-POST /speak         # Text input, returns audio/mpeg stream via ElevenLabs
+POST /speak         # Text → ElevenLabs TTS → audio/mpeg stream
 GET /health         # Health check
 ```
+
+**Tasks completed:**
+- FastAPI server with CORS for extension
+- `/conversation` endpoint with simple test responses
+- `/speak` endpoint integrating ElevenLabs TTS API
+- Virtual environment setup with requirements.txt
+- `.env.example` template for API keys
 
 ---
 

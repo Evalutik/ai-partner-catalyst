@@ -22,7 +22,7 @@ export default function VoiceAgent({
     const [status, setStatus] = useState<Status>('idle');
     const [error, setError] = useState<string | null>(null);
     const [lastTranscript, setLastTranscript] = useState('');
-    const [audioLevel, setAudioLevel] = useState<number[]>([0, 0, 0, 0, 0, 0, 0, 0]);
+    const [audioLevel, setAudioLevel] = useState<number[]>(new Array(12).fill(0));
     const [needsPermission, setNeedsPermission] = useState(false);
     const [hasAttemptedAutoStart, setHasAttemptedAutoStart] = useState(false);
 
@@ -43,13 +43,11 @@ export default function VoiceAgent({
         stop: stopListening
     } = useSpeechRecognition();
 
-    // Update status and notify parent
     const updateStatus = useCallback((newStatus: Status) => {
         setStatus(newStatus);
         onStatusChange?.(newStatus);
     }, [onStatusChange]);
 
-    // Handle speech error
     useEffect(() => {
         if (speechError) {
             if (speechError.includes('permission denied') || speechError.includes('not-allowed')) {
@@ -60,7 +58,7 @@ export default function VoiceAgent({
         }
     }, [speechError, updateStatus]);
 
-    // Audio visualization
+    // Audio visualization with more bars
     const startAudioVisualization = useCallback(async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -68,7 +66,7 @@ export default function VoiceAgent({
 
             const audioContext = new AudioContext();
             const analyser = audioContext.createAnalyser();
-            analyser.fftSize = 32;
+            analyser.fftSize = 64;
 
             const source = audioContext.createMediaStreamSource(stream);
             source.connect(analyser);
@@ -84,14 +82,16 @@ export default function VoiceAgent({
                 analyserRef.current.getByteFrequencyData(dataArray);
 
                 const levels: number[] = [];
-                const bandSize = Math.floor(dataArray.length / 8);
-                for (let i = 0; i < 8; i++) {
+                const bandSize = Math.floor(dataArray.length / 12);
+                for (let i = 0; i < 12; i++) {
                     const start = i * bandSize;
                     let sum = 0;
                     for (let j = 0; j < bandSize; j++) {
                         sum += dataArray[start + j];
                     }
-                    levels.push(Math.min(100, (sum / bandSize / 255) * 150));
+                    const avg = sum / bandSize / 255;
+                    // Add some minimum height and smoothing
+                    levels.push(Math.max(0.1, Math.pow(avg, 0.8) * 1.2));
                 }
 
                 setAudioLevel(levels);
@@ -123,10 +123,10 @@ export default function VoiceAgent({
             streamRef.current = null;
         }
         analyserRef.current = null;
-        setAudioLevel([0, 0, 0, 0, 0, 0, 0, 0]);
+        setAudioLevel(new Array(12).fill(0));
     }, []);
 
-    // Auto-start on mount if enabled
+    // Auto-start
     useEffect(() => {
         if (autoStart && !hasAttemptedAutoStart && isSupported) {
             setHasAttemptedAutoStart(true);
@@ -135,12 +135,11 @@ export default function VoiceAgent({
         }
     }, [autoStart, hasAttemptedAutoStart, isSupported]);
 
-    // Cleanup on unmount
     useEffect(() => {
         return () => stopAudioVisualization();
     }, [stopAudioVisualization]);
 
-    // Detect when user stops speaking (silence detection)
+    // Silence detection
     useEffect(() => {
         if (!transcript || processingRef.current) return;
 
@@ -164,7 +163,6 @@ export default function VoiceAgent({
         };
     }, [transcript, lastTranscript]);
 
-    // Process transcript through backend
     const processTranscript = useCallback(async (text: string) => {
         if (processingRef.current) return;
         processingRef.current = true;
@@ -203,12 +201,10 @@ export default function VoiceAgent({
         });
     };
 
-    // Open permission page
     const openPermissionPage = useCallback(() => {
         chrome.tabs.create({ url: chrome.runtime.getURL('permission.html') });
     }, []);
 
-    // Start voice session
     const handleStart = useCallback(async () => {
         setError(null);
         setLastTranscript('');
@@ -220,7 +216,6 @@ export default function VoiceAgent({
         }
     }, [startListening, startAudioVisualization, updateStatus]);
 
-    // Stop voice session
     const handleStop = useCallback(() => {
         stopListening();
         stopAudioVisualization();
@@ -234,62 +229,81 @@ export default function VoiceAgent({
 
     if (!isSupported) {
         return (
-            <div className="voice-agent">
-                <div className="error-message">
+            <div className="glass-card p-4 border-error/50">
+                <p className="text-sm text-error text-center">
                     Speech recognition not supported in this browser.
-                </div>
+                </p>
             </div>
         );
     }
 
     return (
-        <div className="voice-agent">
-            {/* Audio Level Visualizer */}
-            <div className="audio-visualizer">
+        <div className="flex flex-col items-center gap-4">
+            {/* Audio Visualizer - Sleek bars */}
+            <div className="w-full glass-card p-4 flex items-end justify-center gap-1 h-16">
                 {audioLevel.map((level, i) => (
                     <div
                         key={i}
-                        className="audio-bar"
-                        style={{ height: `${Math.max(4, level)}%` }}
+                        className="audio-bar origin-bottom"
+                        style={{
+                            height: `${Math.max(8, level * 100)}%`,
+                            opacity: 0.6 + level * 0.4,
+                            animationDelay: `${i * 50}ms`
+                        }}
                     />
                 ))}
             </div>
 
             {/* Microphone Button */}
             <button
-                className={`mic-button ${status}`}
                 onClick={isActive ? handleStop : handleStart}
+                className={isActive ? 'btn-listening' : 'btn-primary'}
                 aria-label={isActive ? 'Stop listening' : 'Start listening'}
             >
                 <MicrophoneIcon isActive={isActive} />
-                <span className="mic-label">
-                    {status === 'idle' && 'Start'}
-                    {status === 'listening' && 'Listening'}
+                <span>
+                    {status === 'idle' && 'Start Listening'}
+                    {status === 'listening' && 'Listening...'}
                     {status === 'processing' && 'Thinking...'}
-                    {status === 'speaking' && 'Speaking'}
+                    {status === 'speaking' && 'Speaking...'}
                 </span>
             </button>
 
             {/* Live Transcript */}
             {isListening && (interimTranscript || transcript) && (
-                <div className="transcript-preview">
-                    {transcript.slice(lastTranscript.length)}
-                    <span className="interim">{interimTranscript}</span>
+                <div className="w-full glass-card p-3 border-l-2 border-accent animate-fade-in">
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-white/40">
+                        Hearing...
+                    </span>
+                    <p className="text-sm text-white/80 mt-1">
+                        {transcript.slice(lastTranscript.length)}
+                        <span className="text-white/40">{interimTranscript}</span>
+                    </p>
                 </div>
             )}
 
             {/* Permission Request */}
             {needsPermission && (
-                <div className="permission-request">
-                    <p>Microphone access needed</p>
-                    <button className="permission-btn" onClick={openPermissionPage}>
+                <div className="w-full glass-card p-4 text-center animate-slide-up">
+                    <div className="text-3xl mb-2">🎤</div>
+                    <p className="text-sm text-white/60 mb-3">
+                        Microphone access needed for voice commands
+                    </p>
+                    <button
+                        onClick={openPermissionPage}
+                        className="btn-primary text-sm"
+                    >
                         Grant Permission
                     </button>
                 </div>
             )}
 
             {/* Error Display */}
-            {error && !needsPermission && <div className="error-message">{error}</div>}
+            {error && !needsPermission && (
+                <div className="w-full glass-card p-3 border border-error/50 animate-fade-in">
+                    <p className="text-sm text-error text-center">{error}</p>
+                </div>
+            )}
         </div>
     );
 }
@@ -297,15 +311,15 @@ export default function VoiceAgent({
 function MicrophoneIcon({ isActive }: { isActive: boolean }) {
     return (
         <svg
-            width="18"
-            height="18"
+            width="20"
+            height="20"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
             strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"
-            className={`mic-icon ${isActive ? 'active' : ''}`}
+            className={isActive ? 'animate-mic-pulse' : ''}
         >
             <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
             <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
