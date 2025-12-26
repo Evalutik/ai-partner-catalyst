@@ -69,13 +69,15 @@ async function checkAndRequest() {
         }
 
         if (result.state === 'denied') {
-            // If denied, don't auto-request as it will fail instantly.
-            // Just let the user click 'Allow Access' which will show the "blocked" bubble in address bar
-            console.log("Permission is denied, waiting for user action");
-            statusEl.textContent = 'Permission blocked. Click icon in address bar.';
+            console.log("Permission is denied, forcing request to show blocked icon");
+            statusEl.textContent = 'Permission blocked. Click icon in address bar to unblock.';
             statusEl.style.color = '#c45050';
             grantBtn.textContent = 'Try Again';
-            return; // Don't auto-request
+
+            // Force a request to ensure the "blocked" icon appears in the address bar
+            // We catch the error silently as we already updated the UI for the blocked state
+            navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => { });
+            return;
         }
 
         // If prompt, go ahead and request

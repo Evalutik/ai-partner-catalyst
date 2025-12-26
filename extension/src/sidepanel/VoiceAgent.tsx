@@ -316,7 +316,7 @@ export default function VoiceAgent({
                         Microphone Access Needed
                     </h3>
                     <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)', lineHeight: '1.5' }}>
-                        You will be redirected to the settings page to enable access.
+                        Please allow microphone access to use voice commands. You will be redirected to the settings page to enable access.
                     </p>
                     <button
                         onClick={openPermissionPage}
