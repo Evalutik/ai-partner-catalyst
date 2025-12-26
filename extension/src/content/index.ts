@@ -3,16 +3,12 @@
 // Message listener - responds to requests from popup/background
 chrome.runtime.onMessage.addListener(
     (message: { type: string;[key: string]: unknown }, _sender, sendResponse) => {
-        console.log('[Aeyes Content] Message:', message.type);
-
         if (message.type === 'EXTRACT_DOM') {
-            // Will be implemented in Step 2.1
             const dom = extractDOM();
             sendResponse({ success: true, data: dom });
         }
 
         if (message.type === 'EXECUTE_ACTION') {
-            // Will be implemented in Step 2.3
             const result = executeAction(message.action as Action);
             sendResponse(result);
         }
@@ -171,20 +167,154 @@ function extractDOM(): DOMSnapshot {
     };
 }
 
-// Placeholder - will be implemented in Step 2.3
-function executeAction(action: Action) {
-    console.log('[Aeyes Content] Execute action:', action);
-    return {
-        success: false,
-        message: 'Action execution will be implemented in Step 2.3',
-    };
+// Action result type
+interface ActionResult {
+    success: boolean;
+    message: string;
+}
+
+// Helper to find element by our assigned ID
+function findElementById(elementId: string): HTMLElement | null {
+    return document.querySelector(`[${AEYES_ID_ATTR}="${elementId}"]`) as HTMLElement | null;
+}
+
+// Click action - find element and trigger click
+function actionClick(elementId: string): ActionResult {
+    const element = findElementById(elementId);
+    if (!element) {
+        return { success: false, message: `Element not found: ${elementId}` };
+    }
+
+    try {
+        // Focus first (important for accessibility)
+        element.focus();
+
+        // Trigger click
+        element.click();
+
+        return { success: true, message: `Clicked element: ${elementId}` };
+    } catch (error) {
+        return { success: false, message: `Click failed: ${error}` };
+    }
+}
+
+// Type action - focus input and set value with proper events
+function actionType(elementId: string, text: string): ActionResult {
+    const element = findElementById(elementId);
+    if (!element) {
+        return { success: false, message: `Element not found: ${elementId}` };
+    }
+
+    // Check if it's an input-like element
+    if (!(element instanceof HTMLInputElement ||
+        element instanceof HTMLTextAreaElement ||
+        element.isContentEditable)) {
+        return { success: false, message: `Element is not a text input: ${elementId}` };
+    }
+
+    try {
+        // Focus the element
+        element.focus();
+
+        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+            // Set value
+            element.value = text;
+
+            // Dispatch events to trigger any listeners
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+        } else if (element.isContentEditable) {
+            // For contenteditable elements
+            element.innerText = text;
+            element.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+        }
+
+        return { success: true, message: `Typed "${text}" into element: ${elementId}` };
+    } catch (error) {
+        return { success: false, message: `Type failed: ${error}` };
+    }
+}
+
+// Scroll action - scroll page or to specific element
+function actionScroll(value: string): ActionResult {
+    try {
+        const scrollAmount = window.innerHeight * 0.8; // 80% of viewport
+
+        if (value === 'up') {
+            window.scrollBy({ top: -scrollAmount, behavior: 'smooth' });
+            return { success: true, message: 'Scrolled up' };
+        } else if (value === 'down') {
+            window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
+            return { success: true, message: 'Scrolled down' };
+        } else if (value === 'top') {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            return { success: true, message: 'Scrolled to top' };
+        } else if (value === 'bottom') {
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+            return { success: true, message: 'Scrolled to bottom' };
+        } else {
+            // Assume it's an element ID - scroll to element
+            const element = findElementById(value);
+            if (element) {
+                element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                return { success: true, message: `Scrolled to element: ${value}` };
+            }
+            return { success: false, message: `Unknown scroll target: ${value}` };
+        }
+    } catch (error) {
+        return { success: false, message: `Scroll failed: ${error}` };
+    }
+}
+
+// Navigate action - go to URL
+function actionNavigate(url: string): ActionResult {
+    try {
+        // Validate URL
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            url = 'https://' + url;
+        }
+
+        // Navigate using location.href
+        window.location.href = url;
+
+        return { success: true, message: `Navigating to: ${url}` };
+    } catch (error) {
+        return { success: false, message: `Navigate failed: ${error}` };
+    }
+}
+
+// Main action dispatcher
+function executeAction(action: Action): ActionResult {
+    switch (action.type) {
+        case 'click':
+            if (!action.elementId) {
+                return { success: false, message: 'Click action requires elementId' };
+            }
+            return actionClick(action.elementId);
+
+        case 'type':
+            if (!action.elementId || action.value === undefined) {
+                return { success: false, message: 'Type action requires elementId and value' };
+            }
+            return actionType(action.elementId, action.value);
+
+        case 'scroll':
+            if (!action.value) {
+                return { success: false, message: 'Scroll action requires value (up/down/top/bottom/elementId)' };
+            }
+            return actionScroll(action.value);
+
+        case 'navigate':
+            if (!action.value) {
+                return { success: false, message: 'Navigate action requires value (URL)' };
+            }
+            return actionNavigate(action.value);
+
+        default:
+            return { success: false, message: `Unknown action type: ${(action as any).type}` };
+    }
 }
 
 // Expose for testing in console
-(window as any).extractDOM = () => {
-    const dom = extractDOM();
-    console.log('[Aeyes] Extracted DOM:', dom);
-    return dom;
-};
-
-console.log('[Aeyes] Content script loaded on:', window.location.href);
+(window as any).extractDOM = extractDOM;
+(window as any).executeAction = executeAction;

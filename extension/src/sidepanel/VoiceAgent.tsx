@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useSpeechRecognition } from './useSpeechRecognition';
-import { sendToBackend, getAudioUrl, playAudio } from './api';
+import { sendToBackend, getAudioUrl } from './api';
 import LockIcon from './LockIcon';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
@@ -265,30 +265,65 @@ export default function VoiceAgent({
         });
     }, [onPermissionRequired, hasGreeted, playGreeting]);
 
+    // Get DOM from current page via content script
+    const extractDOMFromPage = useCallback(async (): Promise<string | null> => {
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab?.id) return null;
+
+            const response = await chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_DOM' });
+            if (response?.success && response?.data) {
+                return JSON.stringify(response.data);
+            }
+            return null;
+        } catch {
+            return null;
+        }
+    }, []);
+
+    // Execute actions on current page via content script
+    const executeActions = useCallback(async (actions: Array<{ type: string; elementId?: string; value?: string }>) => {
+        if (!actions || actions.length === 0) return;
+
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab?.id) return;
+
+            for (const action of actions) {
+                await chrome.tabs.sendMessage(tab.id, { type: 'EXECUTE_ACTION', action });
+            }
+        } catch {
+            // Silently fail - action execution is best-effort
+        }
+    }, []);
+
     const processTranscript = useCallback(async (text: string) => {
         if (processingRef.current) return;
         processingRef.current = true;
 
         setLastTranscript(transcript);
 
-        // Capitalize user text
         const capitalizedText = text.charAt(0).toUpperCase() + text.slice(1);
         onTranscript?.(capitalizedText);
 
         updateStatus('processing');
 
         try {
-            // Send original or capitalized? Better to send what we show.
-            const response = await sendToBackend({ transcript: capitalizedText });
+            // Get DOM context from current page
+            const domContext = await extractDOMFromPage();
+
+            // Send transcript AND context to backend
+            const response = await sendToBackend({
+                transcript: capitalizedText,
+                context: domContext || undefined
+            });
 
             updateStatus('speaking');
             const audioUrl = await getAudioUrl(response.response);
 
-            // Store audio element reference for stopping
             const audio = new Audio(audioUrl);
             audioElementRef.current = audio;
 
-            // Show text synced with audio start
             onResponse?.(response.response);
 
             await new Promise<void>((resolve) => {
@@ -298,6 +333,12 @@ export default function VoiceAgent({
             });
 
             audioElementRef.current = null;
+
+            // Execute any actions from Gemini
+            if (response.actions && response.actions.length > 0) {
+                await executeActions(response.actions);
+            }
+
             updateStatus('listening');
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed');
@@ -305,7 +346,7 @@ export default function VoiceAgent({
         } finally {
             processingRef.current = false;
         }
-    }, [transcript, onTranscript, onResponse, updateStatus]);
+    }, [transcript, onTranscript, onResponse, updateStatus, extractDOMFromPage, executeActions]);
 
     const openPermissionPage = useCallback(async () => {
         // Get current active tab to return to it later

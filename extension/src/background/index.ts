@@ -21,8 +21,6 @@ chrome.action?.onClicked?.addListener((tab) => {
 // Message router between side panel and content scripts
 chrome.runtime.onMessage.addListener(
     (message: { type: string;[key: string]: unknown }, _sender, sendResponse) => {
-        console.log('[Aeyes Background] Message:', message.type);
-
         if (message.type === 'EXTRACT_DOM') {
             chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                 if (tabs[0]?.id) {
@@ -48,5 +46,3 @@ chrome.runtime.onMessage.addListener(
         return false;
     }
 );
-
-console.log('[Aeyes] Background service worker loaded');
