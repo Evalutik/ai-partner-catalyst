@@ -1,30 +1,31 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
-/* Sophisticated dark palette - 2025 trends */
+/* Minimal professional palette */
 @theme {
-  /* Background - soft dark grays, not pure black */
-  --color-bg-base: #18181b;
-  /* Zinc 900 - sophisticated dark */
-  --color-bg-card: #1f1f23;
-  --color-bg-elevated: #27272a;
+  /* User provided palette */
+  --color-bg-base: #060606;
+  /* Almost black */
+  --color-bg-card: #0e0e0e;
+  --color-bg-elevated: #161616;
 
-  /* Status colors - muted, sophisticated versions */
-  --color-idle: #52525b;
-  /* Zinc 600 */
-  --color-listening: #6366f1;
-  /* Indigo 500 - sophisticated blue-purple */
-  --color-processing: #10b981;
-  /* Emerald 500 - refined green */
-  --color-speaking: #8b5cf6;
-  /* Violet 500 - elegant purple */
-  --color-error: #f87171;
-  /* Red 400 */
+  --color-text-primary: #E2E2E2;
+  /* Almost white */
+  --color-text-secondary: #ADC2C5;
+  /* Muted cyan */
+  --color-text-muted: #505051;
+  /* Dark gray */
 
-  /* Text */
-  --color-text-primary: #fafafa;
-  --color-text-secondary: #a1a1aa;
-  --color-text-muted: #71717a;
+  /* Status colors */
+  --color-idle: #505051;
+  --color-listening: #505051;
+  --color-processing: #70847C;
+  --color-speaking: #70847C;
+  --color-error: #c45050;
+
+  /* Accents */
+  --color-accent: #ADC2C5;
+  --color-agent: #70847C;
 
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
@@ -44,7 +45,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Main button - clean, no glow */
+/* Main button */
 .btn-voice {
   display: flex;
   align-items: center;
@@ -55,7 +56,7 @@ body {
   font-weight: 500;
   font-size: 14px;
   border: none;
-  border-radius: 10px;
+  border-radius: 8px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -63,30 +64,30 @@ body {
 .btn-voice-idle {
   background: var(--color-bg-elevated);
   color: var(--color-text-primary);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid #1a1a1a;
 }
 
 .btn-voice-idle:hover {
-  background: #303036;
-  border-color: rgba(255, 255, 255, 0.1);
+  background: #1c1c1c;
+  border-color: #252525;
 }
 
 .btn-voice-listening {
   background: var(--color-listening);
-  color: white;
+  color: var(--color-text-primary);
 }
 
 .btn-voice-processing {
   background: var(--color-processing);
-  color: #18181b;
+  color: #060606;
 }
 
 .btn-voice-speaking {
   background: var(--color-speaking);
-  color: white;
+  color: #060606;
 }
 
-/* Audio bars - minimal */
+/* Audio bars */
 .audio-bar {
   width: 3px;
   min-height: 3px;
@@ -95,69 +96,63 @@ body {
 }
 
 .audio-bar-active {
-  background: var(--color-listening);
-  opacity: 0.85;
+  background: var(--color-text-secondary);
+  opacity: 0.7;
 }
 
 .audio-bar-idle {
-  background: var(--color-idle);
-  opacity: 0.35;
+  background: var(--color-text-muted);
+  opacity: 0.3;
 }
 
-/* Message cards */
-.message-card {
-  padding: 10px 12px;
-  background: var(--color-bg-card);
-  border-radius: 8px;
-  border-left: 2px solid transparent;
+/* ChatGPT-style messages - flat, minimal */
+.message {
+  padding: 12px 0;
 }
 
-.message-user {
-  border-left-color: var(--color-idle);
+.message-user .message-content {
+  color: var(--color-text-primary);
 }
 
-.message-agent {
-  border-left-color: var(--color-speaking);
-  background: rgba(139, 92, 246, 0.08);
-}
-
-.message-label {
-  font-size: 9px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--color-text-muted);
-  margin-bottom: 2px;
-}
-
-.message-text {
-  font-size: 13px;
-  line-height: 1.5;
+.message-agent .message-content {
   color: var(--color-text-secondary);
 }
 
-.message-agent .message-text {
-  color: #c4b5fd;
+.message-label {
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.message-user .message-label {
+  color: var(--color-text-muted);
+}
+
+.message-agent .message-label {
+  color: var(--color-agent);
+}
+
+.message-text {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* Divider between messages */
+.message+.message {
+  border-top: 1px solid #1a1a1a;
 }
 
 /* Status text */
-.status-text {
-  font-size: 11px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
 .status-listening {
-  color: var(--color-listening);
+  color: var(--color-text-muted);
 }
 
 .status-processing {
-  color: var(--color-processing);
+  color: var(--color-agent);
 }
 
 .status-speaking {
-  color: var(--color-speaking);
+  color: var(--color-agent);
 }
 
 .status-idle {
@@ -172,7 +167,7 @@ body {
   font-family: ui-monospace, monospace;
   color: var(--color-text-muted);
   background: var(--color-bg-elevated);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid #1a1a1a;
   border-radius: 4px;
 }
 
@@ -180,8 +175,8 @@ body {
 .permission-card {
   padding: 16px;
   background: var(--color-bg-card);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 10px;
+  border: 1px solid #1a1a1a;
+  border-radius: 8px;
   text-align: center;
 }
 
@@ -192,16 +187,16 @@ body {
   padding: 10px 16px;
   font-size: 13px;
   font-weight: 500;
-  color: white;
-  background: var(--color-listening);
+  color: #060606;
+  background: var(--color-accent);
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: opacity 0.15s ease;
 }
 
 .permission-btn:hover {
-  background: #4f46e5;
+  opacity: 0.9;
 }
 
 /* Error */
@@ -237,6 +232,6 @@ body {
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: #1a1a1a;
   border-radius: 3px;
 }

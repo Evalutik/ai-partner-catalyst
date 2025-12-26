@@ -45,14 +45,14 @@ export default function App() {
                 />
             </section>
 
-            {/* Messages - flex-col-reverse so new messages appear at bottom, scroll starts at top */}
+            {/* Messages - ChatGPT style flat list */}
             <section className="flex-1 min-h-0 flex flex-col overflow-hidden">
                 {messages.length > 0 ? (
-                    <div className="flex-1 overflow-y-auto space-y-2 pr-1 scrollbar-thin">
+                    <div className="flex-1 overflow-y-auto pr-1 scrollbar-thin">
                         {messages.map((msg, i) => (
                             <div
                                 key={i}
-                                className={`animate-fade-in ${msg.type === 'user' ? 'message-user' : 'message-agent'} message-card`}
+                                className={`message animate-fade-in ${msg.type === 'user' ? 'message-user' : 'message-agent'}`}
                             >
                                 <div className="message-label">
                                     {msg.type === 'user' ? 'You' : 'Aeyes'}
