@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import VoiceAgent from './VoiceAgent';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
@@ -12,7 +12,7 @@ export default function App() {
     const [status, setStatus] = useState<Status>('idle');
     const [messages, setMessages] = useState<Message[]>([]);
     const [autoStarted, setAutoStarted] = useState(false);
-    const messagesEndRef = useRef<HTMLDivElement>(null);
+    const messagesTopRef = useRef<HTMLDivElement>(null);
 
     const handleTranscript = (text: string) => {
         setMessages(prev => [...prev, { type: 'user', text }]);
@@ -22,15 +22,14 @@ export default function App() {
         setMessages(prev => [...prev, { type: 'agent', text }]);
     };
 
-    useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
+    // Reversed messages - newest first
+    const reversedMessages = [...messages].reverse();
 
     return (
         <div className="h-full flex flex-col p-4 gap-3 overflow-hidden">
             {/* Minimal Header */}
             <header className="shrink-0 text-center">
-                <h1 className="text-lg font-semibold text-white tracking-tight">Aeyes</h1>
+                <h1 className="text-lg font-semibold tracking-tight" style={{ color: '#E2E2E2' }}>Aeyes</h1>
             </header>
 
             {/* Voice Control */}
@@ -45,13 +44,14 @@ export default function App() {
                 />
             </section>
 
-            {/* Messages - ChatGPT style flat list */}
+            {/* Messages - NEW at top, OLD goes down */}
             <section className="flex-1 min-h-0 flex flex-col overflow-hidden">
                 {messages.length > 0 ? (
                     <div className="flex-1 overflow-y-auto pr-1 scrollbar-thin">
-                        {messages.map((msg, i) => (
+                        <div ref={messagesTopRef} />
+                        {reversedMessages.map((msg, i) => (
                             <div
-                                key={i}
+                                key={messages.length - 1 - i}
                                 className={`message animate-fade-in ${msg.type === 'user' ? 'message-user' : 'message-agent'}`}
                             >
                                 <div className="message-label">
@@ -60,7 +60,6 @@ export default function App() {
                                 <p className="message-text">{msg.text}</p>
                             </div>
                         ))}
-                        <div ref={messagesEndRef} />
                     </div>
                 ) : (
                     <div className="flex-1 flex items-center justify-center">

@@ -10,15 +10,15 @@
   --color-bg-elevated: #161616;
 
   --color-text-primary: #E2E2E2;
-  /* Almost white */
-  --color-text-secondary: #ADC2C5;
-  /* Muted cyan */
+  /* Almost white - for text */
+  --color-text-secondary: #E2E2E2;
+  /* Same as primary */
   --color-text-muted: #505051;
   /* Dark gray */
 
   /* Status colors */
-  --color-idle: #505051;
-  --color-listening: #505051;
+  --color-idle: #161616;
+  --color-listening: #E2E2E2;
   --color-processing: #70847C;
   --color-speaking: #70847C;
   --color-error: #c45050;
@@ -73,8 +73,8 @@ body {
 }
 
 .btn-voice-listening {
-  background: var(--color-listening);
-  color: var(--color-text-primary);
+  background: #E2E2E2;
+  color: #060606;
 }
 
 .btn-voice-processing {
@@ -87,7 +87,26 @@ body {
   color: #060606;
 }
 
-/* Audio bars */
+/* Square stop button */
+.btn-stop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  background: var(--color-error);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+  flex-shrink: 0;
+}
+
+.btn-stop:hover {
+  opacity: 0.85;
+}
+
 .audio-bar {
   width: 3px;
   min-height: 3px;
@@ -95,15 +114,6 @@ body {
   transition: height 0.05s ease-out;
 }
 
-.audio-bar-active {
-  background: var(--color-text-secondary);
-  opacity: 0.7;
-}
-
-.audio-bar-idle {
-  background: var(--color-text-muted);
-  opacity: 0.3;
-}
 
 /* ChatGPT-style messages - flat, minimal */
 .message {

@@ -33,11 +33,10 @@ export default function VoiceAgent({
     const analyserRef = useRef<AnalyserNode | null>(null);
     const animationFrameRef = useRef<number | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
+    const audioElementRef = useRef<HTMLAudioElement | null>(null);
 
     const {
-        isListening,
         transcript,
-        interimTranscript,
         error: speechError,
         isSupported,
         start: startListening,
@@ -123,6 +122,15 @@ export default function VoiceAgent({
         setAudioLevel(new Array(16).fill(0));
     }, []);
 
+    // Stop any playing audio
+    const stopAudio = useCallback(() => {
+        if (audioElementRef.current) {
+            audioElementRef.current.pause();
+            audioElementRef.current.currentTime = 0;
+            audioElementRef.current = null;
+        }
+    }, []);
+
     useEffect(() => {
         if (autoStart && !hasAttemptedAutoStart && isSupported) {
             setHasAttemptedAutoStart(true);
@@ -132,8 +140,11 @@ export default function VoiceAgent({
     }, [autoStart, hasAttemptedAutoStart, isSupported]);
 
     useEffect(() => {
-        return () => stopAudioVisualization();
-    }, [stopAudioVisualization]);
+        return () => {
+            stopAudioVisualization();
+            stopAudio();
+        };
+    }, [stopAudioVisualization, stopAudio]);
 
     useEffect(() => {
         if (!transcript || processingRef.current) return;
@@ -168,8 +179,18 @@ export default function VoiceAgent({
 
             updateStatus('speaking');
             const audioUrl = await getAudioUrl(response.response);
-            await playAudio(audioUrl);
 
+            // Store audio element reference for stopping
+            const audio = new Audio(audioUrl);
+            audioElementRef.current = audio;
+
+            await new Promise<void>((resolve) => {
+                audio.onended = () => resolve();
+                audio.onerror = () => resolve();
+                audio.play().catch(() => resolve());
+            });
+
+            audioElementRef.current = null;
             updateStatus('listening');
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed');
@@ -196,11 +217,23 @@ export default function VoiceAgent({
     const handleStop = useCallback(() => {
         stopListening();
         stopAudioVisualization();
+        stopAudio();  // Also stop any playing audio
         updateStatus('idle');
+        processingRef.current = false;
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
-    }, [stopListening, stopAudioVisualization, updateStatus]);
+    }, [stopListening, stopAudioVisualization, stopAudio, updateStatus]);
 
     const isActive = status !== 'idle';
+
+    // Get color for current state
+    const getStateColor = () => {
+        switch (status) {
+            case 'listening': return 'var(--color-listening)';
+            case 'processing': return 'var(--color-processing)';
+            case 'speaking': return 'var(--color-speaking)';
+            default: return 'var(--color-idle)';
+        }
+    };
 
     const getButtonClass = () => {
         switch (status) {
@@ -226,24 +259,28 @@ export default function VoiceAgent({
 
     return (
         <div className="flex flex-col gap-3">
-            {/* Audio Visualizer - No frame, just bars */}
+            {/* Audio Visualizer - color synced with status */}
             <div className="flex items-end justify-center gap-0.5 h-8">
                 {audioLevel.map((level, i) => (
                     <div
                         key={i}
-                        className={`audio-bar ${isActive ? 'audio-bar-active' : 'audio-bar-idle'}`}
-                        style={{ height: `${Math.max(12, level * 100)}%` }}
+                        className="audio-bar"
+                        style={{
+                            height: `${Math.max(12, level * 100)}%`,
+                            background: isActive ? getStateColor() : 'var(--color-idle)',
+                            opacity: isActive ? 0.8 : 0.3
+                        }}
                     />
                 ))}
             </div>
 
-            {/* Main Button */}
+            {/* Single button - shows Stop icon when active */}
             <button
                 onClick={isActive ? handleStop : handleStart}
                 className={getButtonClass()}
             >
-                <MicIcon />
-                <span>{getButtonText()}</span>
+                {isActive ? <StopIcon /> : <MicIcon />}
+                <span>{isActive ? 'Stop' : getButtonText()}</span>
             </button>
 
             {/* Permission Request */}
@@ -272,6 +309,14 @@ function MicIcon() {
             <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
             <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
             <line x1="12" x2="12" y1="19" y2="22" />
+        </svg>
+    );
+}
+
+function StopIcon() {
+    return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="4" y="4" width="16" height="16" rx="2" />
         </svg>
     );
 }
