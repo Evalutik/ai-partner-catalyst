@@ -180,4 +180,11 @@ function executeAction(action: Action) {
     };
 }
 
+// Expose for testing in console
+(window as any).extractDOM = () => {
+    const dom = extractDOM();
+    console.log('[Aeyes] Extracted DOM:', dom);
+    return dom;
+};
+
 console.log('[Aeyes] Content script loaded on:', window.location.href);

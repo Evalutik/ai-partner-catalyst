@@ -6,17 +6,67 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import os
+import json
 from dotenv import load_dotenv
 
+# Load environment variables
 env_path = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(env_path)
+
+# Initialize Gemini
+import google.generativeai as genai
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel("gemini-2.5-flash")
+else:
+    gemini_model = None
+
+# System prompt for Aeyes agent
+SYSTEM_PROMPT = """You are Aeyes, a voice-controlled browser assistant for visually impaired users.
+
+Your job is to help users navigate web pages using voice commands. You receive:
+1. The user's spoken request (transcript)
+2. A JSON snapshot of interactive elements on the current page (DOM context)
+
+Based on this, you must:
+1. Understand what the user wants to do
+2. Find the relevant element(s) in the DOM
+3. Return a helpful spoken response AND an action plan
+
+IMPORTANT RULES:
+- Keep responses SHORT and conversational (1-2 sentences max)
+- Only suggest actions for elements that exist in the DOM
+- If you can't find what the user wants, say so helpfully
+- Never make up element IDs - only use IDs from the DOM snapshot
+
+RESPONSE FORMAT (strict JSON):
+{
+  "response": "Your spoken response to the user",
+  "actions": [
+    {"type": "click", "elementId": "el-5"},
+    {"type": "type", "elementId": "el-3", "value": "search query"},
+    {"type": "scroll", "value": "down"},
+    {"type": "navigate", "value": "https://example.com"}
+  ]
+}
+
+Action types:
+- click: Click an element (requires elementId)
+- type: Type text into an input (requires elementId and value)
+- scroll: Scroll the page (value: "up", "down", or elementId to scroll to)
+- navigate: Go to a URL (requires value with URL)
+
+If no action is needed (e.g., user just says hello), return empty actions array.
+Always respond with valid JSON only - no markdown, no extra text."""
 
 app = FastAPI(title="Aeyes Backend")
 
 # CORS for extension
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow extension origin
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -25,7 +75,7 @@ app.add_middleware(
 
 class ConversationRequest(BaseModel):
     transcript: str
-    context: str | None = None
+    context: str | None = None  # DOM snapshot as JSON string
 
 
 class ConversationResponse(BaseModel):
@@ -39,18 +89,14 @@ class SpeakRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "gemini": gemini_model is not None}
 
 
 @app.post("/conversation", response_model=ConversationResponse)
 async def conversation(request: ConversationRequest):
     """
     Process user transcript with Gemini, return response + actions.
-    For now, returns echo response. Will integrate Gemini in Step 2.
     """
-    # TODO: Integrate Gemini for real processing
-    # For now, simple echo for testing the pipeline
-    
     user_text = request.transcript.strip()
     
     if not user_text:
@@ -59,26 +105,107 @@ async def conversation(request: ConversationRequest):
             actions=None
         )
     
-    # Simple test responses
-    lower = user_text.lower()
-    
-    if "hello" in lower or "hi" in lower:
+    # If Gemini not configured, fall back to echo mode
+    if not gemini_model:
         return ConversationResponse(
-            response="Hello! I'm Aeyes, your voice browser assistant. How can I help you today?",
+            response=f"Gemini not configured. You said: {user_text}",
             actions=None
         )
     
-    if "weather" in lower:
+    try:
+        # Build the prompt with context
+        if request.context:
+            prompt = f"""User request: "{user_text}"
+
+Current page DOM (interactive elements):
+{request.context}
+
+Analyze the request and DOM, then respond with JSON."""
+        else:
+            prompt = f"""User request: "{user_text}"
+
+No DOM context provided - the user may be on the side panel or asking a general question.
+
+Respond with JSON."""
+
+
+        
+        # Call Gemini with retry logic for rate limits
+        import time
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                chat = gemini_model.start_chat(history=[])
+                response = chat.send_message(
+                    SYSTEM_PROMPT + "\n\n" + prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.7,
+                        max_output_tokens=500,
+                    )
+                )
+                break  # Success, exit retry loop
+            except Exception as retry_error:
+                if "quota" in str(retry_error).lower() or "rate" in str(retry_error).lower():
+                    wait_time = (attempt + 1) * 5  # 5s, 10s, 15s
+
+                    time.sleep(wait_time)
+                    if attempt == max_retries - 1:
+                        raise  # Re-raise on final attempt
+                else:
+                    raise  # Non-rate-limit error, re-raise immediately
+        
+        # Parse the response
+        response_text = response.text.strip()
+
+        
+        # Try to extract JSON from the response
+        # Handle cases where Gemini might wrap in markdown code blocks
+        if response_text.startswith("```"):
+            # Remove markdown code block
+            lines = response_text.split("\n")
+            # Find the actual JSON lines (skip ```json and ```)
+            json_lines = []
+            for line in lines:
+                if not line.startswith("```"):
+                    json_lines.append(line)
+            response_text = "\n".join(json_lines)
+        
+        try:
+            parsed = json.loads(response_text)
+
+            return ConversationResponse(
+                response=parsed.get("response", "I understood your request."),
+                actions=parsed.get("actions", None)
+            )
+        except json.JSONDecodeError as je:
+            # Try to extract just the response field using regex
+            import re
+            match = re.search(r'"response"\s*:\s*"([^"]*)"', response_text)
+            if match:
+                extracted_response = match.group(1)
+
+                return ConversationResponse(
+                    response=extracted_response,
+                    actions=None
+                )
+            
+            # Last resort: clean up any JSON-like artifacts from the text
+            clean_text = response_text
+            clean_text = re.sub(r'^\s*\{?\s*"response"\s*:\s*"?', '', clean_text)
+            clean_text = re.sub(r'"?\s*,?\s*"actions"\s*:\s*\[.*\]?\s*\}?\s*$', '', clean_text)
+            clean_text = clean_text.strip().strip('"')
+            
+
+            return ConversationResponse(
+                response=clean_text[:200] if clean_text else "I had trouble understanding. Could you try again?",
+                actions=None
+            )
+            
+    except Exception as e:
         return ConversationResponse(
-            response="I heard you want to check the weather. Once DOM extraction is ready, I'll help you find that information on the page.",
+            response="I had a problem processing that. Please try again.",
             actions=None
         )
-    
-    # Default echo
-    return ConversationResponse(
-        response=f"I heard you say: {user_text}. Full Gemini integration coming in Step 2!",
-        actions=None
-    )
 
 
 @app.post("/speak")
