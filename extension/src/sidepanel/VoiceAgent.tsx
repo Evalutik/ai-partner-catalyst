@@ -10,6 +10,7 @@ interface VoiceAgentProps {
     onResponse?: (text: string) => void;
     autoStart?: boolean;
     onAutoStartComplete?: () => void;
+    status: Status;
 }
 
 export default function VoiceAgent({
@@ -17,9 +18,9 @@ export default function VoiceAgent({
     onTranscript,
     onResponse,
     autoStart = false,
-    onAutoStartComplete
+    onAutoStartComplete,
+    status
 }: VoiceAgentProps) {
-    const [status, setStatus] = useState<Status>('idle');
     const [error, setError] = useState<string | null>(null);
     const [lastTranscript, setLastTranscript] = useState('');
     const [audioLevel, setAudioLevel] = useState<number[]>(new Array(16).fill(0));
@@ -44,7 +45,6 @@ export default function VoiceAgent({
     } = useSpeechRecognition();
 
     const updateStatus = useCallback((newStatus: Status) => {
-        setStatus(newStatus);
         onStatusChange?.(newStatus);
     }, [onStatusChange]);
 
@@ -220,15 +220,6 @@ export default function VoiceAgent({
         }
     };
 
-    const getStatusClass = () => {
-        switch (status) {
-            case 'listening': return 'status-listening';
-            case 'processing': return 'status-processing';
-            case 'speaking': return 'status-speaking';
-            default: return 'status-idle';
-        }
-    };
-
     if (!isSupported) {
         return <div className="error-text">Speech recognition not supported</div>;
     }
@@ -240,7 +231,7 @@ export default function VoiceAgent({
                 {audioLevel.map((level, i) => (
                     <div
                         key={i}
-                        className={`audio-bar ${status === 'idle' ? 'audio-bar-idle' : ''}`}
+                        className={`audio-bar ${isActive ? 'audio-bar-active' : 'audio-bar-idle'}`}
                         style={{ height: `${Math.max(12, level * 100)}%` }}
                     />
                 ))}
@@ -254,17 +245,6 @@ export default function VoiceAgent({
                 <MicIcon />
                 <span>{getButtonText()}</span>
             </button>
-
-            {/* Live Transcript - Shown during listening */}
-            {isListening && (interimTranscript || transcript.slice(lastTranscript.length)) && (
-                <div className="animate-fade-in">
-                    <span className={`status-text ${getStatusClass()}`}>Hearing</span>
-                    <p className="transcript-text mt-1">
-                        {transcript.slice(lastTranscript.length)}
-                        <span className="transcript-interim">{interimTranscript}</span>
-                    </p>
-                </div>
-            )}
 
             {/* Permission Request */}
             {needsPermission && (

@@ -15,8 +15,9 @@
 5. [Technology Stack](#technology-stack)
 6. [Implementation Plan](#implementation-plan)
 7. [Demo Scenarios](#demo-scenarios)
-8. [Quick Start](#quick-start)
+8. [Setup](#setup)
 9. [Resources](#resources)
+
 
 ---
 
@@ -505,67 +506,9 @@ Agent: "Done, added to your cart."
 
 ---
 
-## Quick Start
+## Setup
 
-### Prerequisites
-- Node.js 18+
-- Python 3.10+
-- Chrome browser
-
-### 1. Clone and Get API Keys
-
-```bash
-git clone https://github.com/your-username/ai-partner-catalyst.git
-cd ai-partner-catalyst
-```
-
-**ElevenLabs** (required, free tier available):
-- Sign up: https://elevenlabs.io/
-- Get API key: https://elevenlabs.io/app/settings/api-keys
-
-### 2. Set Up Backend
-
-```bash
-cd backend
-python -m venv venv
-.\venv\Scripts\pip install -r requirements.txt   # Windows
-# source venv/bin/pip install -r requirements.txt  # Mac/Linux
-
-# Create .env file with your API key:
-echo ELEVENLABS_API_KEY=your_key_here > .env
-
-# Start backend
-.\venv\Scripts\python main.py   # Windows
-# source venv/bin/python main.py   # Mac/Linux
-```
-
-Backend runs at http://localhost:8000. Keep this terminal open.
-
-### 3. Build Extension
-
-```bash
-cd extension
-npm install
-npm run build
-```
-
-### 4. Load in Chrome
-
-1. Open `chrome://extensions`
-2. Enable "Developer mode" (top right toggle)
-3. Click "Load unpacked"
-4. Select the `extension/dist` folder
-
-### 5. Test
-
-1. Press **Alt+V** → Side Panel opens on the right
-2. Click "Grant Permission" → Allow microphone (select "Always allow")
-3. Say "Hello" → Agent responds with voice!
-4. Navigate to a new page → Panel stays open for continuous conversation
-
-**To reset microphone permission** (for re-testing):
-- Go to `chrome://settings/content/microphone`
-- Remove the extension from allowed list
+> 📖 **See [README.md](./README.md) for developer setup instructions.**
 
 ---
 

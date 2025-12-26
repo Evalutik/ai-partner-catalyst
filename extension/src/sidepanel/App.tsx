@@ -33,7 +33,7 @@ export default function App() {
                 <h1 className="text-lg font-semibold text-white tracking-tight">Aeyes</h1>
             </header>
 
-            {/* Voice Control - Main section, always visible */}
+            {/* Voice Control */}
             <section className="shrink-0">
                 <VoiceAgent
                     onStatusChange={setStatus}
@@ -41,10 +41,11 @@ export default function App() {
                     onResponse={handleResponse}
                     autoStart={!autoStarted}
                     onAutoStartComplete={() => setAutoStarted(true)}
+                    status={status}
                 />
             </section>
 
-            {/* Messages - Grows to fill space */}
+            {/* Messages - flex-col-reverse so new messages appear at bottom, scroll starts at top */}
             <section className="flex-1 min-h-0 flex flex-col overflow-hidden">
                 {messages.length > 0 ? (
                     <div className="flex-1 overflow-y-auto space-y-2 pr-1 scrollbar-thin">
@@ -70,7 +71,7 @@ export default function App() {
                 )}
             </section>
 
-            {/* Footer - Minimal */}
+            {/* Footer */}
             <footer className="shrink-0 text-center">
                 <span className="text-[10px] text-[var(--color-text-muted)]">
                     <span className="kbd">Alt</span>

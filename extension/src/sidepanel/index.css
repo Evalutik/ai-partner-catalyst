@@ -1,27 +1,30 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
-/* Theme configuration */
+/* Sophisticated dark palette - 2025 trends */
 @theme {
-  --color-bg-dark: #0d0d12;
-  --color-bg-card: #16161d;
-  --color-bg-elevated: #1e1e28;
+  /* Background - soft dark grays, not pure black */
+  --color-bg-base: #18181b;
+  /* Zinc 900 - sophisticated dark */
+  --color-bg-card: #1f1f23;
+  --color-bg-elevated: #27272a;
 
-  /* Status colors - designed for voice assistant states */
-  --color-idle: #6b7280;
-  /* Gray - neutral, waiting */
-  --color-listening: #3b82f6;
-  /* Blue - active, receiving */
-  --color-processing: #22c55e;
-  /* Green - working, thinking */
-  --color-speaking: #a855f7;
-  /* Purple - outputting */
-  --color-error: #ef4444;
-  /* Red - error */
+  /* Status colors - muted, sophisticated versions */
+  --color-idle: #52525b;
+  /* Zinc 600 */
+  --color-listening: #6366f1;
+  /* Indigo 500 - sophisticated blue-purple */
+  --color-processing: #10b981;
+  /* Emerald 500 - refined green */
+  --color-speaking: #8b5cf6;
+  /* Violet 500 - elegant purple */
+  --color-error: #f87171;
+  /* Red 400 */
 
-  --color-text-primary: #f3f4f6;
-  --color-text-secondary: #9ca3af;
-  --color-text-muted: #6b7280;
+  /* Text */
+  --color-text-primary: #fafafa;
+  --color-text-secondary: #a1a1aa;
+  --color-text-muted: #71717a;
 
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
@@ -36,12 +39,12 @@ body,
 
 body {
   font-family: var(--font-sans);
-  background: var(--color-bg-dark);
+  background: var(--color-bg-base);
   color: var(--color-text-primary);
   -webkit-font-smoothing: antialiased;
 }
 
-/* Main button - state-based colors */
+/* Main button - clean, no glow */
 .btn-voice {
   display: flex;
   align-items: center;
@@ -60,61 +63,84 @@ body {
 .btn-voice-idle {
   background: var(--color-bg-elevated);
   color: var(--color-text-primary);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .btn-voice-idle:hover {
-  background: #252532;
-  border-color: rgba(255, 255, 255, 0.15);
+  background: #303036;
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .btn-voice-listening {
   background: var(--color-listening);
   color: white;
-  box-shadow: 0 0 20px rgba(59, 130, 246, 0.3);
-  animation: pulse-blue 2s ease-in-out infinite;
 }
 
 .btn-voice-processing {
   background: var(--color-processing);
-  color: #0d0d12;
-  box-shadow: 0 0 20px rgba(34, 197, 94, 0.3);
+  color: #18181b;
 }
 
 .btn-voice-speaking {
   background: var(--color-speaking);
   color: white;
-  box-shadow: 0 0 20px rgba(168, 85, 247, 0.3);
 }
 
-@keyframes pulse-blue {
-
-  0%,
-  100% {
-    box-shadow: 0 0 20px rgba(59, 130, 246, 0.3);
-  }
-
-  50% {
-    box-shadow: 0 0 30px rgba(59, 130, 246, 0.5);
-  }
-}
-
-/* Audio bars - minimal, no frame */
+/* Audio bars - minimal */
 .audio-bar {
   width: 3px;
   min-height: 3px;
-  background: var(--color-listening);
   border-radius: 2px;
   transition: height 0.05s ease-out;
-  opacity: 0.8;
+}
+
+.audio-bar-active {
+  background: var(--color-listening);
+  opacity: 0.85;
 }
 
 .audio-bar-idle {
-  background: var(--color-text-muted);
-  opacity: 0.4;
+  background: var(--color-idle);
+  opacity: 0.35;
 }
 
-/* Status text - inline, compact */
+/* Message cards */
+.message-card {
+  padding: 10px 12px;
+  background: var(--color-bg-card);
+  border-radius: 8px;
+  border-left: 2px solid transparent;
+}
+
+.message-user {
+  border-left-color: var(--color-idle);
+}
+
+.message-agent {
+  border-left-color: var(--color-speaking);
+  background: rgba(139, 92, 246, 0.08);
+}
+
+.message-label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-muted);
+  margin-bottom: 2px;
+}
+
+.message-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.message-agent .message-text {
+  color: #c4b5fd;
+}
+
+/* Status text */
 .status-text {
   font-size: 11px;
   font-weight: 500;
@@ -138,52 +164,6 @@ body {
   color: var(--color-text-muted);
 }
 
-/* Message cards - compact */
-.message-card {
-  padding: 10px 12px;
-  background: var(--color-bg-card);
-  border-radius: 8px;
-  border-left: 2px solid transparent;
-}
-
-.message-user {
-  border-left-color: var(--color-text-muted);
-}
-
-.message-agent {
-  border-left-color: var(--color-speaking);
-  background: rgba(168, 85, 247, 0.08);
-}
-
-.message-label {
-  font-size: 9px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--color-text-muted);
-  margin-bottom: 2px;
-}
-
-.message-text {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--color-text-secondary);
-}
-
-.message-agent .message-text {
-  color: #c4b5fd;
-}
-
-/* Transcript preview - inline with visualizer */
-.transcript-text {
-  font-size: 13px;
-  color: var(--color-text-secondary);
-}
-
-.transcript-interim {
-  color: var(--color-text-muted);
-}
-
 /* Kbd */
 .kbd {
   display: inline-block;
@@ -192,7 +172,7 @@ body {
   font-family: ui-monospace, monospace;
   color: var(--color-text-muted);
   background: var(--color-bg-elevated);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 4px;
 }
 
@@ -200,7 +180,7 @@ body {
 .permission-card {
   padding: 16px;
   background: var(--color-bg-card);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 10px;
   text-align: center;
 }
@@ -217,10 +197,11 @@ body {
   border: none;
   border-radius: 8px;
   cursor: pointer;
+  transition: background 0.15s ease;
 }
 
 .permission-btn:hover {
-  background: #2563eb;
+  background: #4f46e5;
 }
 
 /* Error */
@@ -256,6 +237,6 @@ body {
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 3px;
 }
