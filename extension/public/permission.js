@@ -1,20 +1,24 @@
 const statusEl = document.getElementById('status');
 const grantBtn = document.getElementById('grantBtn');
 
-// Store the opener tab ID to return to it
-let openerTabId = null;
+// Get the tab ID to return to from URL params
+const urlParams = new URLSearchParams(window.location.search);
+const returnToId = urlParams.get('returnTo');
+let openerTabId = returnToId ? parseInt(returnToId) : null;
 
-// Get the tab that opened this permission page
-chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs[0]) {
-        chrome.tabs.query({}, (allTabs) => {
-            const currentIndex = allTabs.findIndex(t => t.id === tabs[0].id);
-            if (currentIndex > 0) {
-                openerTabId = allTabs[currentIndex - 1].id;
-            }
-        });
-    }
-});
+// Fallback: Try to find previous tab if no param (e.g. if opened manually)
+if (!openerTabId) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+            chrome.tabs.query({}, (allTabs) => {
+                const currentIndex = allTabs.findIndex(t => t.id === tabs[0].id);
+                if (currentIndex > 0) {
+                    openerTabId = allTabs[currentIndex - 1].id;
+                }
+            });
+        }
+    });
+}
 
 function handleSuccess() {
     statusEl.textContent = 'Success! Closing...';

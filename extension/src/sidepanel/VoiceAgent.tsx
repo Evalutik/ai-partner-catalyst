@@ -221,8 +221,16 @@ export default function VoiceAgent({
         }
     }, [transcript, onTranscript, onResponse, updateStatus]);
 
-    const openPermissionPage = useCallback(() => {
-        chrome.tabs.create({ url: chrome.runtime.getURL('permission.html') });
+    const openPermissionPage = useCallback(async () => {
+        // Get current active tab to return to it later
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const returnTabId = tab?.id;
+
+        const url = returnTabId
+            ? chrome.runtime.getURL(`permission.html?returnTo=${returnTabId}`)
+            : chrome.runtime.getURL('permission.html');
+
+        chrome.tabs.create({ url });
     }, []);
 
     const handleStart = useCallback(async () => {
