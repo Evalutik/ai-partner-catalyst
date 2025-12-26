@@ -29,7 +29,7 @@ export default function App() {
         <div className="h-full flex flex-col p-4 gap-3 overflow-hidden">
             {/* Minimal Header */}
             <header className="shrink-0 text-center">
-                <h1 className="text-lg font-semibold tracking-tight" style={{ color: '#E2E2E2' }}>Aeyes</h1>
+                <h1 className="text-lg font-semibold tracking-tight" style={{ color: '#E2E2E2' }}>Aeyes.</h1>
             </header>
 
             {/* Voice Control */}
@@ -55,7 +55,7 @@ export default function App() {
                                 className={`message animate-fade-in ${msg.type === 'user' ? 'message-user' : 'message-agent'}`}
                             >
                                 <div className="message-label">
-                                    {msg.type === 'user' ? 'You' : 'Aeyes'}
+                                    {msg.type === 'user' ? 'You' : 'Aeyes.'}
                                 </div>
                                 <p className="message-text">{msg.text}</p>
                             </div>
