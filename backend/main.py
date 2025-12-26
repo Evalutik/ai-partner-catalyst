@@ -8,7 +8,8 @@ from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(env_path)
 
 app = FastAPI(title="Aeyes Backend")
 
@@ -122,7 +123,10 @@ async def speak(request: SpeakRequest):
             detail="ElevenLabs package not installed. Run: pip install elevenlabs"
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = str(e)
+        if "quota_exceeded" in error_msg.lower():
+            error_msg = "ElevenLabs API quota exceeded. Please check your account credits."
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 if __name__ == "__main__":
