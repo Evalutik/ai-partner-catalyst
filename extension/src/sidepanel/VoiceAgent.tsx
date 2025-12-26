@@ -13,6 +13,7 @@ interface VoiceAgentProps {
     onAutoStartComplete?: () => void;
     status: Status;
     onPermissionRequired?: (required: boolean) => void;
+    onStreamingTranscript?: (text: string) => void;
 }
 
 export default function VoiceAgent({
@@ -22,7 +23,8 @@ export default function VoiceAgent({
     autoStart = false,
     onAutoStartComplete,
     status,
-    onPermissionRequired
+    onPermissionRequired,
+    onStreamingTranscript
 }: VoiceAgentProps) {
     const [error, setError] = useState<string | null>(null);
     const [lastTranscript, setLastTranscript] = useState('');
@@ -40,6 +42,7 @@ export default function VoiceAgent({
 
     const {
         transcript,
+        interimTranscript,
         error: speechError,
         isSupported,
         start: startListening,
@@ -50,20 +53,7 @@ export default function VoiceAgent({
         onStatusChange?.(newStatus);
     }, [onStatusChange]);
 
-    useEffect(() => {
-        // Check initial permission state
-        navigator.permissions.query({ name: 'microphone' as PermissionName }).then((permissionStatus) => {
-            if (permissionStatus.state === 'denied') {
-                setNeedsPermission(true);
-                onPermissionRequired?.(true);
-            }
-            permissionStatus.onchange = () => {
-                const denied = permissionStatus.state === 'denied';
-                setNeedsPermission(denied);
-                onPermissionRequired?.(denied);
-            };
-        });
-    }, [onPermissionRequired]);
+
 
     useEffect(() => {
         if (speechError) {
@@ -152,13 +142,29 @@ export default function VoiceAgent({
         }
     }, []);
 
+    const [hasGreeted, setHasGreeted] = useState(false);
+
     useEffect(() => {
-        if (autoStart && !hasAttemptedAutoStart && isSupported) {
+        // Only auto-start AFTER greeting is done (or if we don't need to greet for some reason)
+        // But for this flow, we assume greeting happens first. 
+        // Actually, playGreeting calls startListening itself.
+        // So we strictly prevent this effect from running if we are in the "waiting to greet" phase.
+        // However, if we've ALREADY greeted (hasGreeted=true), this shouldn't run either because playGreeting handled it?
+        // Wait, if hasAttemptedAutoStart is persistent, we just need to make sure we don't start listening BEFORE speaking.
+
+        // BETTER FIX: Do nothing here if we rely on playGreeting to start us.
+        // We can just disable this effect's logic if "permission granted & waiting to greet" logic is active.
+        // Since playGreeting sets state to listening at end, we can arguably remove this effect or guard it.
+
+        // If we just want to suppress the flash:
+        if (autoStart && !hasAttemptedAutoStart && isSupported && hasGreeted) {
             setHasAttemptedAutoStart(true);
-            handleStart();
+            // handleStart(); // playGreeting does this. So we might not need to call it again.
+            // But if playGreeting fails or is skipped?
+            // Let's rely on playGreeting for the first run.
             onAutoStartComplete?.();
         }
-    }, [autoStart, hasAttemptedAutoStart, isSupported]);
+    }, [autoStart, hasAttemptedAutoStart, isSupported, hasGreeted]);
 
     useEffect(() => {
         return () => {
@@ -168,7 +174,18 @@ export default function VoiceAgent({
     }, [stopAudioVisualization, stopAudio]);
 
     useEffect(() => {
-        if (!transcript || processingRef.current) return;
+        if (processingRef.current) return;
+
+        // Calculate current real-time text
+        const currentPart = transcript.slice(lastTranscript.length);
+        const fullCurrentText = (currentPart + interimTranscript).trim();
+
+        if (fullCurrentText) {
+            const capitalizedText = fullCurrentText.charAt(0).toUpperCase() + fullCurrentText.slice(1);
+            onStreamingTranscript?.(capitalizedText);
+        }
+
+        if (!transcript) return;
 
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
 
@@ -184,19 +201,85 @@ export default function VoiceAgent({
         return () => {
             if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
         };
-    }, [transcript, lastTranscript]);
+    }, [transcript, interimTranscript, lastTranscript, onStreamingTranscript]);
+
+    const playGreeting = useCallback(async () => {
+        if (hasGreeted) return;
+        setHasGreeted(true);
+
+        try {
+            updateStatus('speaking');
+
+            const greetingText = "Hi, I'm Aeyes. How can I help you?";
+
+            const audioUrl = await getAudioUrl(greetingText);
+
+            const audio = new Audio(audioUrl);
+            audioElementRef.current = audio;
+
+            // Sync: Show text just before playing
+            onResponse?.(greetingText);
+
+            await new Promise<void>((resolve) => {
+                audio.onended = () => resolve();
+                audio.onerror = () => resolve();
+                audio.play().catch(() => resolve());
+            });
+
+            audioElementRef.current = null;
+
+
+            // Seamless transition to listening
+            const success = await startAudioVisualization();
+            if (success) {
+                updateStatus('listening');
+                startListening();
+            } else {
+                updateStatus('idle');
+            }
+
+        } catch (e) {
+            console.warn("Greeting failed", e);
+            updateStatus('idle');
+        }
+    }, [hasGreeted, updateStatus, startListening, startAudioVisualization]);
+
+    useEffect(() => {
+        // Check initial permission state
+        navigator.permissions.query({ name: 'microphone' as PermissionName }).then((permissionStatus) => {
+            if (permissionStatus.state === 'denied') {
+                setNeedsPermission(true);
+                onPermissionRequired?.(true);
+            } else if (permissionStatus.state === 'granted' && !hasGreeted) {
+                playGreeting();
+            }
+            permissionStatus.onchange = () => {
+                const denied = permissionStatus.state === 'denied';
+                setNeedsPermission(denied);
+                onPermissionRequired?.(denied);
+
+                if (!denied && !hasGreeted) {
+                    playGreeting();
+                }
+            };
+        });
+    }, [onPermissionRequired, hasGreeted, playGreeting]);
 
     const processTranscript = useCallback(async (text: string) => {
         if (processingRef.current) return;
         processingRef.current = true;
 
         setLastTranscript(transcript);
-        onTranscript?.(text);
+
+        // Capitalize user text
+        const capitalizedText = text.charAt(0).toUpperCase() + text.slice(1);
+        onTranscript?.(capitalizedText);
+
         updateStatus('processing');
 
         try {
-            const response = await sendToBackend({ transcript: text });
-            onResponse?.(response.response);
+            // Send original or capitalized? Better to send what we show.
+            const response = await sendToBackend({ transcript: capitalizedText });
 
             updateStatus('speaking');
             const audioUrl = await getAudioUrl(response.response);
@@ -204,6 +287,9 @@ export default function VoiceAgent({
             // Store audio element reference for stopping
             const audio = new Audio(audioUrl);
             audioElementRef.current = audio;
+
+            // Show text synced with audio start
+            onResponse?.(response.response);
 
             await new Promise<void>((resolve) => {
                 audio.onended = () => resolve();

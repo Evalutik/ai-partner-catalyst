@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import VoiceAgent from './VoiceAgent';
+import AnimatedMessage from './AnimatedMessage';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
 
@@ -14,7 +15,10 @@ export default function App() {
     const [autoStarted, setAutoStarted] = useState(false);
     const messagesTopRef = useRef<HTMLDivElement>(null);
 
+    const [streamingText, setStreamingText] = useState('');
+
     const handleTranscript = (text: string) => {
+        setStreamingText(''); // Clear streaming text when final transcript is received
         setMessages(prev => [...prev, { type: 'user', text }]);
     };
 
@@ -39,6 +43,7 @@ export default function App() {
                 <VoiceAgent
                     onStatusChange={setStatus}
                     onTranscript={handleTranscript}
+                    onStreamingTranscript={setStreamingText}
                     onResponse={handleResponse}
                     autoStart={!autoStarted}
                     onAutoStartComplete={() => setAutoStarted(true)}
@@ -49,9 +54,22 @@ export default function App() {
 
             {/* Messages - NEW at top, OLD goes down */}
             <section className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                {messages.length > 0 ? (
+                {(messages.length > 0 || streamingText) ? (
                     <div className="flex-1 overflow-y-auto pr-1 scrollbar-thin">
                         <div ref={messagesTopRef} />
+
+                        {/* Streaming Message (Newest, appearing at top) */}
+                        {streamingText && (
+                            <div className="message animate-fade-in message-user">
+                                <div className="message-label">You</div>
+                                <AnimatedMessage
+                                    text={streamingText}
+                                    isUser={true}
+                                    speed={40} // Fast but visible animation for streaming
+                                />
+                            </div>
+                        )}
+
                         {reversedMessages.map((msg, i) => (
                             <div
                                 key={messages.length - 1 - i}
@@ -60,7 +78,12 @@ export default function App() {
                                 <div className="message-label">
                                     {msg.type === 'user' ? 'You' : 'Aeyes.'}
                                 </div>
-                                <p className="message-text">{msg.text}</p>
+                                <AnimatedMessage
+                                    text={msg.text}
+                                    isUser={msg.type === 'user'}
+                                    speed={msg.type === 'user' ? 80 : 250}
+                                    startVisible={msg.type === 'user'} // Instant show for user history (since it was just streamed)
+                                />
                             </div>
                         ))}
                     </div>
