@@ -3,12 +3,14 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Aeyes - Microphone Permission</title>
+    <title>Aeyes. Permission</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: #0f0f14;
-            color: #f0f0f5;
+            background: #060606;
+            color: #E2E2E2;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -20,108 +22,72 @@
         }
 
         h1 {
-            margin-bottom: 16px;
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 32px;
+            letter-spacing: -0.025em;
         }
 
         p {
-            color: #9090a0;
-            margin-bottom: 16px;
-            max-width: 450px;
+            color: #505051;
+            margin-bottom: 32px;
+            max-width: 320px;
             line-height: 1.6;
-        }
-
-        .important {
-            background: rgba(108, 92, 231, 0.2);
-            border: 1px solid #6c5ce7;
-            padding: 16px;
-            border-radius: 12px;
-            margin-bottom: 24px;
-            max-width: 450px;
-        }
-
-        .important strong {
-            color: #8577ed;
-        }
-
-        .success {
-            color: #00d26a;
-        }
-
-        .error {
-            color: #ff5757;
+            font-size: 14px;
         }
 
         button {
-            background: #6c5ce7;
-            color: white;
+            background: #E2E2E2;
+            color: #060606;
             border: none;
-            padding: 14px 28px;
-            border-radius: 12px;
-            font-size: 1rem;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
             cursor: pointer;
+            transition: opacity 0.2s;
         }
 
         button:hover {
-            background: #8577ed;
+            opacity: 0.9;
         }
 
         button:disabled {
-            opacity: 0.6;
-            cursor: default;
+            opacity: 0.5;
+            cursor: wait;
+        }
+
+        .icon {
+            margin-bottom: 24px;
+            opacity: 0.8;
         }
 
         #status {
-            margin-top: 20px;
-            font-size: 1.1rem;
-        }
-
-        .steps {
-            text-align: left;
-            background: #1a1a24;
-            padding: 20px;
-            border-radius: 12px;
             margin-top: 24px;
-            max-width: 450px;
-        }
-
-        .steps h3 {
-            margin-bottom: 12px;
-            color: #f0f0f5;
-        }
-
-        .steps ol {
-            padding-left: 20px;
-            color: #9090a0;
-        }
-
-        .steps li {
-            margin-bottom: 8px;
+            font-size: 13px;
+            color: #70847C;
+            height: 20px;
         }
     </style>
 </head>
 
 <body>
-    <h1>🎤 Microphone Access</h1>
-
-    <div class="important">
-        <strong>Important:</strong> When the permission dialog appears, click <strong>"Allow"</strong> and select
-        <strong>"Always allow"</strong> so you won't need to do this again.
+    <div class="icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#E2E2E2" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" x2="12" y1="19" y2="22" />
+        </svg>
     </div>
 
-    <p>Aeyes needs microphone permission to hear your voice commands.</p>
+    <h1>Microphone Access</h1>
 
-    <button id="grantBtn">Grant Microphone Access</button>
+    <p>Aeyes. needs microphone permission to hear your commands.</p>
+
+    <button id="grantBtn">Allow Access</button>
+
     <div id="status"></div>
-
-    <div class="steps">
-        <h3>After granting permission:</h3>
-        <ol>
-            <li>This tab will close automatically</li>
-            <li>Click the Aeyes extension icon again</li>
-            <li>Voice listening will start automatically</li>
-            <li>Just speak your command!</li>
-        </ol>
-    </div>
 
     <script src="permission.js"></script>
 </body>

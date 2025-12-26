@@ -22,6 +22,8 @@ export default function App() {
         setMessages(prev => [...prev, { type: 'agent', text }]);
     };
 
+    const [permissionRequired, setPermissionRequired] = useState(false);
+
     // Reversed messages - newest first
     const reversedMessages = [...messages].reverse();
 
@@ -41,6 +43,7 @@ export default function App() {
                     autoStart={!autoStarted}
                     onAutoStartComplete={() => setAutoStarted(true)}
                     status={status}
+                    onPermissionRequired={setPermissionRequired}
                 />
             </section>
 
@@ -63,9 +66,11 @@ export default function App() {
                     </div>
                 ) : (
                     <div className="flex-1 flex items-center justify-center">
-                        <p className="text-xs text-[var(--color-text-muted)]">
-                            Say something to start...
-                        </p>
+                        {!permissionRequired && (
+                            <p className="text-xs text-[var(--color-text-muted)]">
+                                Say something to start...
+                            </p>
+                        )}
                     </div>
                 )}
             </section>

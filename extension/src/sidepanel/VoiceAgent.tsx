@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useSpeechRecognition } from './useSpeechRecognition';
 import { sendToBackend, getAudioUrl, playAudio } from './api';
+import LockIcon from './LockIcon';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
 
@@ -11,6 +12,7 @@ interface VoiceAgentProps {
     autoStart?: boolean;
     onAutoStartComplete?: () => void;
     status: Status;
+    onPermissionRequired?: (required: boolean) => void;
 }
 
 export default function VoiceAgent({
@@ -19,7 +21,8 @@ export default function VoiceAgent({
     onResponse,
     autoStart = false,
     onAutoStartComplete,
-    status
+    status,
+    onPermissionRequired
 }: VoiceAgentProps) {
     const [error, setError] = useState<string | null>(null);
     const [lastTranscript, setLastTranscript] = useState('');
@@ -48,14 +51,30 @@ export default function VoiceAgent({
     }, [onStatusChange]);
 
     useEffect(() => {
+        // Check initial permission state
+        navigator.permissions.query({ name: 'microphone' as PermissionName }).then((permissionStatus) => {
+            if (permissionStatus.state === 'denied') {
+                setNeedsPermission(true);
+                onPermissionRequired?.(true);
+            }
+            permissionStatus.onchange = () => {
+                const denied = permissionStatus.state === 'denied';
+                setNeedsPermission(denied);
+                onPermissionRequired?.(denied);
+            };
+        });
+    }, [onPermissionRequired]);
+
+    useEffect(() => {
         if (speechError) {
             if (speechError.includes('permission denied') || speechError.includes('not-allowed')) {
                 setNeedsPermission(true);
+                onPermissionRequired?.(true);
             }
             setError(speechError);
             updateStatus('idle');
         }
-    }, [speechError, updateStatus]);
+    }, [speechError, updateStatus, onPermissionRequired]);
 
     const startAudioVisualization = useCallback(async () => {
         try {
@@ -97,13 +116,15 @@ export default function VoiceAgent({
 
             updateLevels();
             setNeedsPermission(false);
+            onPermissionRequired?.(false);
             setError(null);
             return true;
         } catch {
             setNeedsPermission(true);
+            onPermissionRequired?.(true);
             return false;
         }
-    }, []);
+    }, [onPermissionRequired]);
 
     const stopAudioVisualization = useCallback(() => {
         if (animationFrameRef.current) {
@@ -274,23 +295,35 @@ export default function VoiceAgent({
                 ))}
             </div>
 
-            {/* Single button - shows Stop icon when active */}
-            <button
-                onClick={isActive ? handleStop : handleStart}
-                className={getButtonClass()}
-            >
-                {isActive ? <StopIcon /> : <MicIcon />}
-                <span>{isActive ? 'Stop' : getButtonText()}</span>
-            </button>
+            {/* Single button - toggles or starts. Hidden if permission needed */}
+            {!needsPermission && (
+                <button
+                    onClick={isActive ? handleStop : handleStart}
+                    className={getButtonClass()}
+                >
+                    {isActive ? <StopIcon /> : <MicIcon />}
+                    <span>{isActive ? 'Stop' : getButtonText()}</span>
+                </button>
+            )}
 
             {/* Permission Request */}
             {needsPermission && (
                 <div className="permission-card animate-fade-in">
-                    <p className="text-xs text-[var(--color-text-secondary)] mb-3">
-                        Microphone access required
+                    <div className="mb-3 text-center">
+                        <LockIcon />
+                    </div>
+                    <h3 className="text-sm font-semibold mb-2" style={{ color: 'var(--color-text-primary)' }}>
+                        Microphone Access Needed
+                    </h3>
+                    <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)', lineHeight: '1.5' }}>
+                        You will be redirected to the settings page to enable access.
                     </p>
-                    <button onClick={openPermissionPage} className="permission-btn">
-                        Grant Access
+                    <button
+                        onClick={openPermissionPage}
+                        className="permission-btn w-full justify-center"
+                        style={{ background: '#E2E2E2', color: '#060606' }}
+                    >
+                        Open Permission Settings
                     </button>
                 </div>
             )}

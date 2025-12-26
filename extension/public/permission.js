@@ -1,4 +1,3 @@
-// Permission page script - requests microphone access
 const statusEl = document.getElementById('status');
 const grantBtn = document.getElementById('grantBtn');
 
@@ -8,7 +7,6 @@ let openerTabId = null;
 // Get the tab that opened this permission page
 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (tabs[0]) {
-        // Store current tab, we'll focus the previous one
         chrome.tabs.query({}, (allTabs) => {
             const currentIndex = allTabs.findIndex(t => t.id === tabs[0].id);
             if (currentIndex > 0) {
@@ -18,22 +16,20 @@ chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     }
 });
 
-grantBtn.addEventListener('click', async () => {
+async function requestPermission() {
     try {
-        statusEl.textContent = 'Requesting permission...';
-        statusEl.className = '';
+        statusEl.textContent = 'Requesting...';
         grantBtn.disabled = true;
 
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-        // Stop the stream immediately - we just needed the permission
+        // Stop stream immediately
         stream.getTracks().forEach(track => track.stop());
 
-        statusEl.textContent = '✓ Permission granted! Returning to your page...';
-        statusEl.className = 'success';
-        grantBtn.textContent = 'Done!';
+        statusEl.textContent = 'Success! Closing...';
+        grantBtn.textContent = 'Granted';
 
-        // Focus the original tab and close this one
+        // Close and return
         setTimeout(() => {
             if (openerTabId) {
                 chrome.tabs.update(openerTabId, { active: true }, () => {
@@ -42,12 +38,19 @@ grantBtn.addEventListener('click', async () => {
             } else {
                 window.close();
             }
-        }, 1500);
+        }, 1000);
 
     } catch (err) {
-        statusEl.textContent = '✗ Permission denied. Please click Allow and select "Always allow".';
-        statusEl.className = 'error';
+        console.error(err);
+        statusEl.textContent = ''; // Clear status, let user click button
         grantBtn.disabled = false;
-        grantBtn.textContent = 'Try Again';
+        grantBtn.textContent = 'Allow Access';
     }
+}
+
+grantBtn.addEventListener('click', requestPermission);
+
+// Auto-request on load
+window.addEventListener('load', () => {
+    setTimeout(requestPermission, 800);
 });
