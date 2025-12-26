@@ -55,6 +55,8 @@
         button:disabled {
             opacity: 0.5;
             cursor: wait;
+            color: #E2E2E2;
+            /* Keep E2E2E2 even when disabled (requesting) */
         }
 
         .icon {
@@ -67,6 +69,12 @@
             font-size: 13px;
             color: #70847C;
             height: 20px;
+            /* Ensure status text for 'Requesting...' inherits or explicitly uses E2E2E2 if needed via class */
+        }
+
+        .status-requesting {
+            color: #E2E2E2 !important;
+            opacity: 0.7;
         }
     </style>
 </head>
@@ -84,6 +92,10 @@
     <h1>Microphone Access</h1>
 
     <p>Aeyes. needs microphone permission to hear your commands.</p>
+
+    <p style="margin-top: -16px; font-size: 13px; opacity: 0.6; margin-bottom: 32px;">
+        This page will close automatically when access is granted.
+    </p>
 
     <button id="grantBtn">Allow Access</button>
 
