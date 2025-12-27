@@ -17,19 +17,33 @@ load_dotenv(env_path)
 import vertexai
 from vertexai.generative_models import GenerativeModel
 
-# Get credentials path from env or use default
+# Get credentials path - look in backend/ folder by default
 GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", 
-    os.path.join(os.path.dirname(__file__), "..", "project-a20ae662-5941-48ee-a0d-91a6281350f0.json"))
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "project-a20ae662-5941-48ee-a0d")
+    os.path.join(os.path.dirname(__file__), "service-account-key.json"))
 LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+# Auto-extract project ID from service account JSON (no need for separate env var)
+PROJECT_ID = None
+try:
+    with open(GOOGLE_CREDENTIALS_PATH, 'r') as f:
+        sa_data = json.load(f)
+        PROJECT_ID = sa_data.get('project_id')
+        print(f"[Aeyes] Loaded project ID from service account: {PROJECT_ID}")
+except Exception as e:
+    print(f"[Aeyes] Warning: Could not read project ID from service account: {e}")
 
 try:
     # Set credentials environment variable
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GOOGLE_CREDENTIALS_PATH
     
     # Initialize Vertex AI
-    vertexai.init(project=PROJECT_ID, location=LOCATION)
-    gemini_model = GenerativeModel("gemini-2.0-flash-001")
+    if PROJECT_ID:
+        vertexai.init(project=PROJECT_ID, location=LOCATION)
+        gemini_model = GenerativeModel("gemini-2.0-flash-001")
+        print(f"[Aeyes] Vertex AI initialized in {LOCATION}")
+    else:
+        print("[Aeyes] No project ID found - Gemini disabled")
+        gemini_model = None
 except Exception as e:
     print(f"[Aeyes] Failed to initialize Vertex AI: {e}")
     gemini_model = None
@@ -42,45 +56,42 @@ CRITICAL: You MUST respond with ONLY valid JSON. No extra text, no markdown, no 
 When user asks you to do something, break it into steps and return JSON with this EXACT format:
 
 {
-  "response": "Short friendly message about what you'll do",
+  "response": "Short friendly message about what you're doing, and offer to help more",
   "actions": [list of actions],
   "requiresFollowUp": false
 }
 
-<<<<<<< HEAD
 ACTION TYPES:
-1. navigate - Go to URL: {"type": "navigate", "value": "https://url.com", "waitForPage": true}
-2. type - Type text: {"type": "type", "elementId": "id-from-dom", "value": "text to type", "needsDom": true}
-3. click - Click element: {"type": "click", "elementId": "id-from-dom"}
+1. navigate - Go to URL: {"type": "navigate", "value": "https://url.com", "waitForPage": true, "newTab": true}
+   - Use "newTab": true (default) when user says "open", "open in new tab", etc.
+   - Use "newTab": false when user says "go to", "navigate to" in current tab
+2. type - Type text: {"type": "type", "description": "what element to find", "value": "text to type", "needsDom": true}
+3. click - Click element: {"type": "click", "description": "what element to click", "needsDom": true}
 4. scroll - Scroll page: {"type": "scroll", "value": "down"}
-=======
-Action types:
-- click: Click an element (requires elementId)
-- type: Type text into an input (requires elementId and value)
-- scroll: Scroll the page (value: "up", "down", "top", "bottom", or elementId to scroll to a heading/section)
-- navigate: Go to a URL (requires value with URL)
->>>>>>> karaya-branch
+
+NOTE: For actions with needsDom: true, use "description" (human-readable) instead of "elementId".
+The system will find the actual element ID from the page DOM.
 
 EXAMPLES:
 
 User: "Go to YouTube and search for cats"
 YOU MUST RETURN:
 {
-  "response": "I'll take you to YouTube and search for cats",
+  "response": "I'll take you to YouTube and search for cats. Let me know if you need anything else!",
   "actions": [
-    {"type": "navigate", "value": "https://youtube.com", "waitForPage": true},
-    {"type": "type", "elementId": "search", "value": "cats", "needsDom": true},
-    {"type": "click", "elementId": "search-button", "needsDom": true}
+    {"type": "navigate", "value": "https://youtube.com", "waitForPage": true, "newTab": false},
+    {"type": "type", "description": "search input box", "value": "cats", "needsDom": true},
+    {"type": "click", "description": "search button", "needsDom": true}
   ],
   "requiresFollowUp": false
 }
 
-User: "Navigate to Google"
+User: "Open Google"
 YOU MUST RETURN:
 {
-  "response": "Opening Google for you",
+  "response": "Opening Google for you. Anything else?",
   "actions": [
-    {"type": "navigate", "value": "https://google.com", "waitForPage": true}
+    {"type": "navigate", "value": "https://google.com", "waitForPage": true, "newTab": true}
   ],
   "requiresFollowUp": false
 }
@@ -93,11 +104,26 @@ YOU MUST RETURN:
   "requiresFollowUp": false
 }
 
+SPECIAL MESSAGES:
+
+1. [ACTION_FAILED] - An action failed. Analyze the error and DOM context to suggest recovery:
+   - If element not visible: suggest {"type": "scroll", "value": "down"} to reveal it
+   - If login required: respond asking user to log in first
+   - If element doesn't exist: try alternative description or ask user
+   
+2. [Continue] - Previous actions completed. Analyze the new page DOM and complete the task.
+
 REMEMBER:
 - ALWAYS include "actions" field (empty array [] if no actions needed)
-- For multi-step requests (like "go to X and do Y"), include ALL actions
+- For multi-step requests (like "go to X and do Y"), include ALL actions in ONE response
+- The "response" is spoken AFTER all actions complete - describe what you did briefly
 - Set waitForPage: true for navigate actions
-- Set needsDom: true for actions that need fresh page elements
+- Set needsDom: true for actions that need DOM elements from the new page
+- When recovering from [ACTION_FAILED], suggest ONE recovery action at a time
+- If you need to analyze page content, set requiresFollowUp: true
+- CRITICAL: Before finishing, verify you fulfilled the user's ENTIRE request. 
+  * Example: if user said "open video", merely searching is NOT enough. You must click the video.
+  * If the goal is not fully reached, return requiresFollowUp: true to continue.
 - Response with JSON ONLY - nothing else!"""
 
 app = FastAPI(title="Aeyes Backend")
@@ -209,21 +235,11 @@ Respond with JSON."""
         max_retries = 3
         for attempt in range(max_retries):
             try:
-<<<<<<< HEAD
-                chat = gemini_model.start_chat(history=[])
-                response = chat.send_message(
-                    SYSTEM_PROMPT + "\n\n" + prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=0.3,  # Lower temperature for more consistent JSON
-                        max_output_tokens=2048,  # Increased from 500 to allow complete responses
-                        response_mime_type="application/json"  # Force JSON output
-=======
                 response = gemini_model.generate_content(
                     full_prompt,
                     generation_config=GenerationConfig(
-                        temperature=0.7,
-                        max_output_tokens=500,
->>>>>>> karaya-branch
+                        temperature=0.3,  # Lower temperature for more consistent JSON
+                        max_output_tokens=2048,  # Allow complete responses
                     )
                 )
                 break  # Success, exit retry loop
@@ -398,6 +414,96 @@ async def speak(request: SpeakRequest):
         if "quota_exceeded" in error_msg.lower():
             error_msg = "ElevenLabs API quota exceeded. Please check your account credits."
         raise HTTPException(status_code=500, detail=error_msg)
+
+class ResolveElementRequest(BaseModel):
+    dom_context: str  # DOM snapshot as JSON string
+    action_type: str  # type of action (click, type, etc.)
+    action_description: str  # what element to find (e.g., "search input", "submit button")
+    action_value: str | None = None  # for type actions, the text to type
+
+
+class ResolveElementResponse(BaseModel):
+    element_id: str | None
+    success: bool
+    message: str
+
+
+@app.post("/resolve-element", response_model=ResolveElementResponse)
+async def resolve_element(request: ResolveElementRequest):
+    """
+    Given DOM context, find the correct element ID for an action.
+    Used for multi-step workflows where element IDs aren't known upfront.
+    """
+    if not gemini_model:
+        return ResolveElementResponse(
+            element_id=None,
+            success=False,
+            message="Gemini not configured"
+        )
+
+    resolve_prompt = f"""You are a DOM element finder. Given a DOM snapshot, find the element that matches the description.
+
+DOM CONTEXT:
+{request.dom_context}
+
+TASK: Find the element for: {request.action_description}
+Action type: {request.action_type}
+{f'Text to type: {request.action_value}' if request.action_value else ''}
+
+Return ONLY a JSON object with this format:
+{{"elementId": "the-element-id-from-dom", "confidence": "high|medium|low"}}
+
+If you can't find a suitable element, return:
+{{"elementId": null, "confidence": "none", "reason": "why not found"}}
+
+Look for elements by:
+- Text content matching the description
+- Label or placeholder text
+- Role or aria-label
+- Common patterns (search inputs usually named "search", "q", "query", etc.)
+
+Return JSON ONLY."""
+
+    try:
+        result = await gemini_model.generate_content_async(resolve_prompt)
+        response_text = result.text.strip()
+        
+        # Clean up response
+        if "```" in response_text:
+            import re
+            match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', response_text, re.DOTALL)
+            if match:
+                response_text = match.group(1).strip()
+        
+        first_brace = response_text.find('{')
+        last_brace = response_text.rfind('}')
+        if first_brace != -1 and last_brace > first_brace:
+            response_text = response_text[first_brace:last_brace + 1]
+        
+        parsed = json.loads(response_text)
+        element_id = parsed.get("elementId")
+        confidence = parsed.get("confidence", "low")
+        
+        if element_id and confidence != "none":
+            return ResolveElementResponse(
+                element_id=element_id,
+                success=True,
+                message=f"Found element with {confidence} confidence"
+            )
+        else:
+            return ResolveElementResponse(
+                element_id=None,
+                success=False,
+                message=parsed.get("reason", "Element not found")
+            )
+            
+    except Exception as e:
+        print(f"[Aeyes] Element resolution failed: {e}")
+        return ResolveElementResponse(
+            element_id=None,
+            success=False,
+            message=str(e)
+        )
 
 
 if __name__ == "__main__":

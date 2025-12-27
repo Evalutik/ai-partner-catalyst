@@ -33,8 +33,5 @@ __pycache__/
 venv/
 .venv/
 
-# Google Cloud service account keys (NEVER commit!)
-*-service-account*.json
-*-credentials*.json
+# Google Cloud service account key (NEVER commit!)
 service-account-key.json
-project-*.json

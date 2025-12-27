@@ -39,6 +39,7 @@ export interface UseSpeechRecognitionResult {
     isSupported: boolean;
     start: () => void;
     stop: () => void;
+    abort: () => void;
 }
 
 export function useSpeechRecognition(): UseSpeechRecognitionResult {
@@ -47,7 +48,9 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
     const [interimTranscript, setInterimTranscript] = useState('');
     const [error, setError] = useState<string | null>(null);
 
+    const isAbortedRef = useRef(false);
     const recognitionRef = useRef<SpeechRecognition | null>(null);
+    const shouldAutoRestartRef = useRef(true);  // Controls auto-restart behavior
     const isSupported = typeof window !== 'undefined' &&
         ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window);
 
@@ -68,6 +71,8 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         };
 
         recognition.onresult = (event: SpeechRecognitionEvent) => {
+            if (isAbortedRef.current) return; // STRICT DROP of results if aborted
+
             let interim = '';
             let final = '';
 
@@ -103,6 +108,9 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
                 case 'network':
                     setError('Network error. Please check your connection.');
                     break;
+                case 'aborted':
+                    // Expected when we abort
+                    return;
                 default:
                     setError(`Speech recognition error: ${event.error}`);
             }
@@ -112,13 +120,15 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
 
         recognition.onend = () => {
             setIsListening(false);
-            // Auto-restart if we're supposed to be listening (unless error occurred)
-            if (recognitionRef.current && !error) {
+            // Auto-restart only if allowed (not manually stopped/aborted) and no error
+            if (recognitionRef.current && shouldAutoRestartRef.current && !error && !isAbortedRef.current) {
                 // Restart after brief pause
                 setTimeout(() => {
                     try {
-                        recognitionRef.current?.start();
-                    } catch (e) {
+                        if (!isAbortedRef.current) {
+                            recognitionRef.current?.start();
+                        }
+                    } catch {
                         // Already started, ignore
                     }
                 }, 100);
@@ -130,10 +140,16 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         return () => {
             recognition.abort();
         };
-    }, [isSupported, error]);
+    }, [isSupported]);
 
     const start = useCallback(() => {
         if (!recognitionRef.current) return;
+        // Don't start if already listening
+        if (isListening) return;
+
+        // Enable auto-restart when user starts listening
+        shouldAutoRestartRef.current = true;
+        isAbortedRef.current = false; // Reset abort flag
 
         setTranscript('');
         setInterimTranscript('');
@@ -141,18 +157,32 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
 
         try {
             recognitionRef.current.start();
-        } catch (e) {
-            // Already started
-            console.warn('[Speech] Already started');
+        } catch {
+            // Already started - silently ignore
         }
-    }, []);
+    }, [isListening]);
 
     const stop = useCallback(() => {
         if (!recognitionRef.current) return;
 
+        // Disable auto-restart when user explicitly stops
+        shouldAutoRestartRef.current = false;
+
         try {
             recognitionRef.current.stop();
-        } catch (e) {
+        } catch {
+            // Already stopped
+        }
+        setIsListening(false);
+    }, []);
+
+    const abort = useCallback(() => {
+        if (!recognitionRef.current) return;
+        shouldAutoRestartRef.current = false;
+        isAbortedRef.current = true; // Set flag to drop all pending results
+        try {
+            recognitionRef.current.abort();
+        } catch {
             // Already stopped
         }
         setIsListening(false);
@@ -166,5 +196,6 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         isSupported,
         start,
         stop,
+        abort,
     };
 }

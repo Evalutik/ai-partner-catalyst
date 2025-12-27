@@ -28,20 +28,23 @@ export default function VoiceAgent({
     onStreamingTranscript
 }: VoiceAgentProps) {
     const [error, setError] = useState<string | null>(null);
-    const [lastTranscript, setLastTranscript] = useState('');
     const [audioLevel, setAudioLevel] = useState<number[]>(new Array(16).fill(0));
     const [needsPermission, setNeedsPermission] = useState(false);
     const [hasAttemptedAutoStart, setHasAttemptedAutoStart] = useState(false);
     const [conversationId, setConversationId] = useState<string | null>(null);
+    const [hasGreeted, setHasGreeted] = useState(false);
     const [isPaused, setIsPaused] = useState(false); // Listening paused by user
 
+    // Refs for audio and processing state
+    const hasGreetedRef = useRef(false);
+    const audioElementRef = useRef<HTMLAudioElement | null>(null);
     const processingRef = useRef(false);
+    const speakingRef = useRef(false); // Synchronous speaking state
     const silenceTimeoutRef = useRef<number | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const analyserRef = useRef<AnalyserNode | null>(null);
     const animationFrameRef = useRef<number | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
-    const audioElementRef = useRef<HTMLAudioElement | null>(null);
 
     const {
         transcript,
@@ -49,7 +52,8 @@ export default function VoiceAgent({
         error: speechError,
         isSupported,
         start: startListening,
-        stop: stopListening
+        stop: stopListening,
+        abort: abortListening
     } = useSpeechRecognition();
 
     const updateStatus = useCallback((newStatus: Status) => {
@@ -143,73 +147,12 @@ export default function VoiceAgent({
             audioElementRef.current.currentTime = 0;
             audioElementRef.current = null;
         }
+        speakingRef.current = false; // Ensure speaking flag is cleared
     }, []);
 
-    const [hasGreeted, setHasGreeted] = useState(false);
-
-    useEffect(() => {
-        // Only auto-start AFTER greeting is done (or if we don't need to greet for some reason)
-        // But for this flow, we assume greeting happens first. 
-        // Actually, playGreeting calls startListening itself.
-        // So we strictly prevent this effect from running if we are in the "waiting to greet" phase.
-        // However, if we've ALREADY greeted (hasGreeted=true), this shouldn't run either because playGreeting handled it?
-        // Wait, if hasAttemptedAutoStart is persistent, we just need to make sure we don't start listening BEFORE speaking.
-
-        // BETTER FIX: Do nothing here if we rely on playGreeting to start us.
-        // We can just disable this effect's logic if "permission granted & waiting to greet" logic is active.
-        // Since playGreeting sets state to listening at end, we can arguably remove this effect or guard it.
-
-        // If we just want to suppress the flash:
-        if (autoStart && !hasAttemptedAutoStart && isSupported && hasGreeted) {
-            setHasAttemptedAutoStart(true);
-            // handleStart(); // playGreeting does this. So we might not need to call it again.
-            // But if playGreeting fails or is skipped?
-            // Let's rely on playGreeting for the first run.
-            onAutoStartComplete?.();
-        }
-    }, [autoStart, hasAttemptedAutoStart, isSupported, hasGreeted]);
-
-    useEffect(() => {
-        return () => {
-            stopAudioVisualization();
-            stopAudio();
-        };
-    }, [stopAudioVisualization, stopAudio]);
-
-    useEffect(() => {
-        if (processingRef.current) return;
-
-        // Calculate current real-time text
-        const currentPart = transcript.slice(lastTranscript.length);
-        const fullCurrentText = (currentPart + interimTranscript).trim();
-
-        if (fullCurrentText) {
-            const capitalizedText = fullCurrentText.charAt(0).toUpperCase() + fullCurrentText.slice(1);
-            onStreamingTranscript?.(capitalizedText);
-        }
-
-        if (!transcript) return;
-
-        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
-
-        if (transcript.length > lastTranscript.length) {
-            silenceTimeoutRef.current = window.setTimeout(async () => {
-                const newText = transcript.slice(lastTranscript.length).trim();
-                if (newText && !processingRef.current) {
-                    // Audio cue: user finished speaking
-                    await playDoneSound();
-                    await processTranscript(newText);
-                }
-            }, 1500);
-        }
-
-        return () => {
-            if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
-        };
-    }, [transcript, interimTranscript, lastTranscript, onStreamingTranscript]);
-
     const playGreeting = useCallback(async () => {
-        if (hasGreeted) return;
+        if (hasGreetedRef.current) return;
+        hasGreetedRef.current = true;
         setHasGreeted(true);
 
         try {
@@ -217,6 +160,7 @@ export default function VoiceAgent({
             await playStartupSound();
 
             updateStatus('speaking');
+            speakingRef.current = true;
 
             const greetingText = "Hi, I'm Aeyes. How can I help you?";
 
@@ -235,6 +179,7 @@ export default function VoiceAgent({
             });
 
             audioElementRef.current = null;
+            speakingRef.current = false;
 
             // Play done sound after speaking
             await playDoneSound();
@@ -252,8 +197,67 @@ export default function VoiceAgent({
         } catch (e) {
             console.warn("Greeting failed", e);
             updateStatus('idle');
+            speakingRef.current = false;
         }
     }, [hasGreeted, updateStatus, startListening, startAudioVisualization, onResponse]);
+
+    // Initial greeting on mount
+    useEffect(() => {
+        if (autoStart && !hasAttemptedAutoStart && isSupported) {
+            setHasAttemptedAutoStart(true);
+            // Small delay to ensure permissions are ready
+            setTimeout(() => {
+                playGreeting();
+            }, 500);
+        }
+    }, [autoStart, hasAttemptedAutoStart, isSupported, playGreeting]);
+
+    useEffect(() => {
+        return () => {
+            stopAudioVisualization();
+            stopAudio();
+        };
+    }, [stopAudioVisualization, stopAudio]);
+
+    useEffect(() => {
+        // STRICT GUARD: Ignore any input if we are processing or speaking
+        if (status === 'processing' || status === 'speaking' || processingRef.current || speakingRef.current) return;
+
+        // Calculate current real-time text
+        // transcript is automatically reset by startListening(), so we can use it directly
+        const fullCurrentText = (transcript + interimTranscript).trim();
+
+        if (fullCurrentText) {
+            const capitalizedText = fullCurrentText.charAt(0).toUpperCase() + fullCurrentText.slice(1);
+            onStreamingTranscript?.(capitalizedText);
+        } else {
+            onStreamingTranscript?.('');
+        }
+
+        if (!transcript) return;
+
+        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+
+        if (transcript.trim()) {
+            silenceTimeoutRef.current = window.setTimeout(async () => {
+                // Double check status before processing
+                if (status === 'processing' || status === 'speaking' || processingRef.current || speakingRef.current) return;
+
+                const newText = transcript.trim();
+                if (newText) {
+                    // Audio cue: user finished speaking
+                    await playDoneSound();
+                    await processTranscript(newText);
+                }
+            }, 1500);
+        }
+
+        return () => {
+            if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+        };
+    }, [transcript, interimTranscript, onStreamingTranscript]);
+
+
 
     useEffect(() => {
         // Check initial permission state
@@ -293,6 +297,7 @@ export default function VoiceAgent({
     }, []);
 
     // Execute actions on current page via content script with multi-step support
+    // Returns execution result for adaptive error handling
     const executeActions = useCallback(async (actions: Array<{
         type: string;
         elementId?: string;
@@ -300,45 +305,150 @@ export default function VoiceAgent({
         waitForPage?: boolean;
         needsDom?: boolean;
         description?: string;
-    }>) => {
-        if (!actions || actions.length === 0) return;
+    }>): Promise<{ success: boolean; failedAction?: string; failReason?: string; lastDom?: string }> => {
+        if (!actions || actions.length === 0) return { success: true };
 
         try {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (!tab?.id) return;
+            let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab?.id) return { success: false, failReason: 'No active tab' };
+
+            let lastDom: string | null = null;
 
             for (let i = 0; i < actions.length; i++) {
                 const action = actions[i];
                 console.log(`[Aeyes] Executing action ${i + 1}/${actions.length}:`, action.description || action.type);
 
-                // If action needs fresh DOM, get it first
-                if (action.needsDom && i > 0) {
-                    console.log('[Aeyes] Getting fresh DOM snapshot...');
-                    // Small delay to let page settle
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                // Handle navigate actions directly with Chrome tabs API
+                if (action.type === 'navigate' && action.value) {
+                    let url = action.value;
+                    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                        url = 'https://' + url;
+                    }
+
+                    const openInNewTab = (action as any).newTab !== false;
+
+                    if (openInNewTab) {
+                        console.log('[Aeyes] Opening in new tab:', url);
+                        const newTab = await chrome.tabs.create({ url });
+                        if (newTab?.id) {
+                            tab = newTab;
+                        }
+                    } else {
+                        console.log('[Aeyes] Navigating current tab to:', url);
+                        if (tab.id) {
+                            await chrome.tabs.update(tab.id, { url });
+                        }
+                    }
+
+                    if (action.waitForPage !== false) {
+                        await new Promise(resolve => setTimeout(resolve, 2500));
+                    }
+                    continue;
                 }
 
-                // Execute the action
-                await chrome.tabs.sendMessage(tab.id, { type: 'EXECUTE_ACTION', action });
+                // If action needs DOM, fetch it and resolve the element ID
+                if (action.needsDom) {
+                    console.log('[Aeyes] Fetching fresh DOM for element resolution...');
+                    await new Promise(resolve => setTimeout(resolve, 1000));
 
-                // If action requires waiting for page load (e.g., navigation)
+                    // Get fresh DOM from the current page
+                    let domContext: string | null = null;
+                    try {
+                        const response = await chrome.tabs.sendMessage(tab.id!, { type: 'EXTRACT_DOM' });
+                        if (response?.success && response?.data) {
+                            domContext = JSON.stringify(response.data);
+                            lastDom = domContext;
+                        }
+                    } catch (e) {
+                        console.warn('[Aeyes] Could not extract DOM:', e);
+                        return {
+                            success: false,
+                            failedAction: action.description || action.type,
+                            failReason: 'Could not access page content. The page may not be fully loaded.',
+                            lastDom: lastDom || undefined
+                        };
+                    }
+
+                    if (domContext && (action as any).description) {
+                        console.log('[Aeyes] Resolving element:', (action as any).description);
+                        try {
+                            const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+                            const resolveResponse = await fetch(`${backendUrl}/resolve-element`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    dom_context: domContext,
+                                    action_type: action.type,
+                                    action_description: (action as any).description,
+                                    action_value: action.value
+                                })
+                            });
+
+                            const resolved = await resolveResponse.json();
+                            console.log('[Aeyes] Element resolution result:', resolved);
+
+                            if (resolved.success && resolved.element_id) {
+                                action.elementId = resolved.element_id;
+                            } else {
+                                // Element not found - return failure for adaptive handling
+                                return {
+                                    success: false,
+                                    failedAction: (action as any).description || action.type,
+                                    failReason: `Could not find "${(action as any).description}". ${resolved.message || 'Element may not be visible, may need to scroll, or login may be required.'}`,
+                                    lastDom: domContext
+                                };
+                            }
+                        } catch (e) {
+                            console.error('[Aeyes] Element resolution API failed:', e);
+                            return {
+                                success: false,
+                                failedAction: (action as any).description || action.type,
+                                failReason: 'Failed to communicate with backend',
+                                lastDom: domContext
+                            };
+                        }
+                    }
+                }
+
+                // Execute the action via content script
+                try {
+                    const result = await chrome.tabs.sendMessage(tab.id!, { type: 'EXECUTE_ACTION', action });
+                    if (result && !result.success) {
+                        return {
+                            success: false,
+                            failedAction: action.description || action.type,
+                            failReason: result.message || 'Action failed',
+                            lastDom: lastDom || undefined
+                        };
+                    }
+                } catch (e) {
+                    console.warn('[Aeyes] Content script not available:', action.type);
+                    return {
+                        success: false,
+                        failedAction: action.description || action.type,
+                        failReason: 'Page is not accessible (may be a restricted page)',
+                        lastDom: lastDom || undefined
+                    };
+                }
+
                 if (action.waitForPage) {
                     console.log('[Aeyes] Waiting for page to load...');
-                    // Wait for page to load (simple approach: fixed delay)
-                    // In production, use chrome.tabs.onUpdated or webNavigation API
                     await new Promise(resolve => setTimeout(resolve, 2000));
                 }
 
-                // Small delay between actions for stability
                 if (i < actions.length - 1) {
                     await new Promise(resolve => setTimeout(resolve, 300));
                 }
             }
 
-            console.log('[Aeyes] All actions completed');
+            console.log('[Aeyes] All actions completed successfully');
+            return { success: true, lastDom: lastDom || undefined };
         } catch (error) {
             console.error('[Aeyes] Action execution failed:', error);
-            // Silently fail - action execution is best-effort
+            return {
+                success: false,
+                failReason: 'Unexpected error during action execution'
+            };
         }
     }, []);
 
@@ -346,42 +456,109 @@ export default function VoiceAgent({
         if (processingRef.current) return;
         processingRef.current = true;
 
-        setLastTranscript(transcript);
+        // Stop listening during processing phase
+        stopListening();
 
         const capitalizedText = text.charAt(0).toUpperCase() + text.slice(1);
         onTranscript?.(capitalizedText);
 
         updateStatus('processing');
 
+        const MAX_TOTAL_STEPS = 10;
+        const MAX_CONSECUTIVE_FAILURES = 3;
+
+        let stepCount = 0;
+        let consecutiveFailures = 0;
+        let currentTranscript = capitalizedText;
+        let finalResponseText = '';
+
         try {
-            // Get DOM context from current page
-            const domContext = await extractDOMFromPage();
+            while (stepCount < MAX_TOTAL_STEPS) {
+                stepCount++;
 
-            // Send transcript AND context to backend with conversation ID
-            const response = await sendToBackend({
-                transcript: capitalizedText,
-                context: domContext || undefined,
-                conversation_id: conversationId || undefined
-            });
+                // 1. Get DOM context from current page
+                let domContext = await extractDOMFromPage();
 
-            // Store conversation ID for continuity
-            if (response.conversation_id && !conversationId) {
-                setConversationId(response.conversation_id);
+                // 2. Send transcript AND context to backend with conversation ID
+                let response = await sendToBackend({
+                    transcript: currentTranscript,
+                    context: domContext || undefined,
+                    conversation_id: conversationId || undefined
+                });
+
+                // Store conversation ID for continuity
+                if (response.conversation_id && !conversationId) {
+                    setConversationId(response.conversation_id);
+                }
+
+                // 3. Execute actions if any
+                let actionResult = { success: true } as { success: boolean; failedAction?: string; failReason?: string; lastDom?: string };
+                if (response.actions && response.actions.length > 0) {
+                    actionResult = await executeActions(response.actions);
+                }
+
+                // 4. Handle Failure
+                if (!actionResult.success) {
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                        throw new Error(`Failed to complete task after ${MAX_CONSECUTIVE_FAILURES} failed attempts on step "${actionResult.failedAction}": ${actionResult.failReason}`);
+                    }
+
+                    console.log(`[Aeyes] Action failed (consecutive failure ${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`, actionResult.failReason);
+
+                    // Build recovery message for AI
+                    currentTranscript = `[ACTION_FAILED] I tried to "${actionResult.failedAction}" but it failed: ${actionResult.failReason}. Please suggest a recovery action (scroll, wait, ask user for help, or try a different approach). Current page context is attached.`;
+
+                    // Use the last DOM from the failed action if available to give AI better context
+                    if (actionResult.lastDom) {
+                        // Ideally we would pass this to the next loop iteration's sendToBackend,
+                        // but extractDOMFromPage() will run again at top of loop.
+                        // We rely on the page state being whatever it is now.
+                    }
+                    continue; // Loop back to try recovery
+                }
+
+                // Success! Reset consecutive failures
+                consecutiveFailures = 0;
+
+                // 5. Check Follow Up
+                if (response.requiresFollowUp) {
+                    console.log(`[Aeyes] Follow-up required (step ${stepCount}/${MAX_TOTAL_STEPS})...`);
+
+                    // Wait a bit for new page to fully load if actions were just taken
+                    if (response.actions && response.actions.length > 0) {
+                        await new Promise(resolve => setTimeout(resolve, 1500));
+                    }
+
+                    currentTranscript = "[Continue - analyze the current page and complete the task]";
+                    continue; // Loop back to continue task
+                }
+
+                // 6. No failure, no follow-up -> We are done!
+                finalResponseText = response.response;
+                break;
             }
 
-            // Execute actions IMMEDIATELY (before audio plays)
-            // This ensures navigation/clicks happen right away
-            if (response.actions && response.actions.length > 0) {
-                await executeActions(response.actions);
+            // Exited loop. Check if we failed to get a final response.
+            if (!finalResponseText) {
+                if (stepCount >= MAX_TOTAL_STEPS) {
+                    console.error('[Aeyes] Max total steps reached');
+                    finalResponseText = "I'm sorry, I tried to complete the task but it required too many steps. Could you try breaking it down into simpler requests?";
+                } else {
+                    // Should not start here unless empty response from backend
+                    finalResponseText = "Task completed.";
+                }
             }
 
+            // Speak final response
             updateStatus('speaking');
-            const audioUrl = await getAudioUrl(response.response);
+            speakingRef.current = true;
+            const audioUrl = await getAudioUrl(finalResponseText);
 
             const audio = new Audio(audioUrl);
             audioElementRef.current = audio;
 
-            onResponse?.(response.response);
+            onResponse?.(finalResponseText);
 
             await new Promise<void>((resolve) => {
                 audio.onended = () => resolve();
@@ -390,24 +567,59 @@ export default function VoiceAgent({
             });
 
             audioElementRef.current = null;
+            speakingRef.current = false;
 
-            // Execute any actions from Gemini (with multi-step support)
-            if (response.actions && response.actions.length > 0) {
-                await executeActions(response.actions);
+            // Restart listening if not paused
+            if (!isPaused) {
+                // Wait small delay to ensure audio is fully done and avoid self-hearing
+                await new Promise(resolve => setTimeout(resolve, 1000));
+
+                await playDoneSound();
+                await playListeningSound();
+                startListening();
+                updateStatus('listening');
+            } else {
+                updateStatus('idle');
             }
 
-            // Audio cue: done speaking, now listening again
-            await playDoneSound();
-            await playListeningSound();
-
-            updateStatus('listening');
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed');
-            updateStatus('idle');
+            console.error('[Aeyes] Process failed:', err);
+            const errorMsg = err instanceof Error ? err.message : 'I encountered an error.';
+
+            // Speak the error to the user
+            try {
+                updateStatus('speaking');
+                speakingRef.current = true;
+                const audioUrl = await getAudioUrl("I'm having trouble with that. " + errorMsg);
+                const audio = new Audio(audioUrl);
+                audioElementRef.current = audio;
+                onResponse?.("Error: " + errorMsg);
+                await new Promise<void>((resolve) => {
+                    audio.onended = () => resolve();
+                    audio.onerror = () => resolve();
+                    audio.play().catch(() => resolve());
+                });
+                audioElementRef.current = null;
+                speakingRef.current = false;
+            } catch (e) { /* ignore audio error */ }
+
+            if (!isPaused) {
+                stopListening(); // Make sure we stop in error state or reset?
+                // Wait small delay here too
+                await new Promise(resolve => setTimeout(resolve, 1000));
+
+                // Actually usually better to go back to listening
+                await playListeningSound();
+                startListening();
+                updateStatus('listening');
+            } else {
+                updateStatus('idle');
+            }
         } finally {
             processingRef.current = false;
         }
-    }, [transcript, onTranscript, onResponse, updateStatus, extractDOMFromPage, executeActions]);
+    }, [transcript, onTranscript, onResponse, updateStatus, extractDOMFromPage, executeActions, isPaused, abortListening, stopListening, startListening, conversationId]);
+
 
     const openPermissionPage = useCallback(async () => {
         // Get current active tab to return to it later
@@ -475,11 +687,21 @@ export default function VoiceAgent({
             {!needsPermission && (
                 <button
                     onClick={handlePauseToggle}
-                    className={`btn-voice ${isPaused ? 'btn-voice-idle' : 'btn-voice-listening'}`}
+                    className={`btn-voice ${isPaused ? 'btn-voice-idle' : `btn-voice-${status}`}`}
                     aria-label={isPaused ? 'Start listening' : 'Stop listening'}
+                    disabled={status === 'processing'}
                 >
-                    {isPaused ? <MicIcon /> : <StopIcon />}
-                    <span>{isPaused ? 'Start' : 'Stop'}</span>
+                    {isPaused ? (
+                        <MicIcon />
+                    ) : status === 'processing' ? (
+                        <div className="spinner-wrapper">
+                            <div className="spinner-ring" />
+                            <StopIconSmall />
+                        </div>
+                    ) : (
+                        <StopIcon />
+                    )}
+                    <span>{isPaused ? 'Start' : status === 'processing' ? 'Processing...' : 'Stop'}</span>
                 </button>
             )}
 
@@ -530,3 +752,12 @@ function StopIcon() {
         </svg>
     );
 }
+
+function StopIconSmall() {
+    return (
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" className="spinner-icon">
+            <rect x="4" y="4" width="16" height="16" rx="2" />
+        </svg>
+    );
+}
+

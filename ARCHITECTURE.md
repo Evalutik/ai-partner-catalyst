@@ -145,9 +145,16 @@ Chrome popups close when the page navigates. For a blind user doing multi-step t
 ```
 ai-partner-catalyst/
 ├── ARCHITECTURE.md           # This file - project documentation
-├── README.md                 # Quick project overview
-├── .env.example              # Environment template (safe to commit)
+├── README.md                 # Quick start guide
 ├── .gitignore                # Prevents committing secrets
+│
+├── backend/                  # Python FastAPI Backend
+│   ├── main.py               # API endpoints: /conversation, /speak
+│   ├── requirements.txt      # Python dependencies
+│   ├── .env.example          # Template (copy to .env)
+│   ├── .env                  # YOUR API keys (create from example)
+│   ├── service-account-key.json  # YOUR GCP credentials (download from console)
+│   └── venv/                 # Virtual environment (not committed)
 │
 ├── extension/                # Chrome Extension (Manifest V3)
 │   ├── public/
@@ -167,33 +174,27 @@ ai-partner-catalyst/
 │   │       ├── useSpeechRecognition.ts # Web Speech API hook
 │   │       ├── api.ts        # Backend API calls
 │   │       └── index.css     # Styles (dark theme, Inter font)
+│   ├── .env.example          # Template (copy to .env)
+│   ├── .env                  # Backend URL config (optional)
 │   ├── dist/                 # Build output - load this in Chrome
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── tsconfig.json
 │
-├── backend/                  # Python FastAPI Backend
-│   ├── main.py               # API endpoints: /conversation, /speak
-│   ├── requirements.txt      # Python dependencies
-│   ├── venv/                 # Virtual environment (not committed)
-│   ├── .env                  # Secrets (not committed)
-│   └── .env.example          # Template for secrets
-│
 └── docs/
     └── assets/               # Screenshots, diagrams
 ```
 
-**Environment Setup:**
+**Environment Files (Gitignored):**
 
 > [!CAUTION]
-> **Never commit `.env` files!** They contain API keys.
+> **Never commit these files!** They contain secrets.
 
-The `.gitignore` is configured to exclude:
-- `extension/.env` — no secrets needed (backend URL only)
-- `backend/.env` — contains `ELEVENLABS_API_KEY`
-- `backend/venv/` — Python virtual environment
-- `extension/node_modules/` — npm packages
-- `extension/dist/` — build output
+| File | Purpose | How to Create |
+|------|---------|---------------|
+| `backend/.env` | ElevenLabs API key | Copy from `backend/.env.example` |
+| `backend/service-account-key.json` | Google Cloud credentials | Download from GCP Console |
+| `extension/.env` | Backend URL (optional) | Copy from `extension/.env.example` |
 
 ---
 
