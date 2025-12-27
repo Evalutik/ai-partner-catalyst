@@ -47,6 +47,7 @@ export default function VoiceAgent({
     const streamRef = useRef<MediaStream | null>(null);
 
     const {
+        isListening,
         transcript,
         interimTranscript,
         error: speechError,
@@ -255,7 +256,23 @@ export default function VoiceAgent({
         return () => {
             if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
         };
-    }, [transcript, interimTranscript, onStreamingTranscript]);
+        return () => {
+            if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+        };
+    }, [transcript, interimTranscript, onStreamingTranscript, status]);
+
+    // Watchdog: Ensure speech recognition is actually running when we think it is
+    useEffect(() => {
+        if (status === 'listening' && !isListening && !isPaused && !error && !processingRef.current) {
+            const timeout = setTimeout(() => {
+                if (status === 'listening' && !isListening && !isPaused && !error) {
+                    console.log('[VoiceAgent] Watchdog: Restarting stalled recognition...');
+                    startListening();
+                }
+            }, 500); // Give it a moment to transition
+            return () => clearTimeout(timeout);
+        }
+    }, [status, isListening, isPaused, error, startListening]);
 
 
 
@@ -457,7 +474,7 @@ export default function VoiceAgent({
         processingRef.current = true;
 
         // Stop listening during processing phase
-        stopListening();
+        abortListening();
 
         const capitalizedText = text.charAt(0).toUpperCase() + text.slice(1);
         onTranscript?.(capitalizedText);
@@ -570,14 +587,19 @@ export default function VoiceAgent({
             speakingRef.current = false;
 
             // Restart listening if not paused
-            if (!isPaused) {
-                // Wait small delay to ensure audio is fully done and avoid self-hearing
-                await new Promise(resolve => setTimeout(resolve, 1000));
+            if (!isPausedRef.current) {
+                // Wait delay to ensure audio is fully done and avoid self-hearing
+                await new Promise(resolve => setTimeout(resolve, 1500));
 
-                await playDoneSound();
-                await playListeningSound();
-                startListening();
-                updateStatus('listening');
+                // Check again after delay
+                if (!isPausedRef.current) {
+                    await playDoneSound();
+                    await playListeningSound();
+                    startListening();
+                    updateStatus('listening');
+                } else {
+                    updateStatus('idle');
+                }
             } else {
                 updateStatus('idle');
             }
@@ -645,22 +667,28 @@ export default function VoiceAgent({
         }
     };
 
+    // Ref to track paused state in async functions
+    const isPausedRef = useRef(isPaused);
+    useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
+
     // Toggle pause/resume listening
     const handlePauseToggle = useCallback(async () => {
         if (isPaused) {
             // Resume listening
             await playUnmuteSound();
             setIsPaused(false);
+            // State update will trigger ref update, but for immediate logic we can assume false
             startListening();
             updateStatus('listening');
         } else {
-            // Pause listening
+            // Pause listening AND stop speaking
             await playMuteSound();
             setIsPaused(true);
+            stopAudio(); // Stop any current speech
             stopListening();
             updateStatus('idle');
         }
-    }, [isPaused, startListening, stopListening, updateStatus]);
+    }, [isPaused, startListening, stopListening, stopAudio, updateStatus]);
 
     if (!isSupported) {
         return <div className="error-text">Speech recognition not supported</div>;

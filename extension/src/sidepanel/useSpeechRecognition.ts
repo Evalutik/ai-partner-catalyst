@@ -92,6 +92,8 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         };
 
         recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+            if (event.error === 'aborted') return; // Ignore aborted "errors" completely
+
             console.error('[Speech] Error:', event.error);
 
             // Handle specific errors
@@ -157,8 +159,10 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
 
         try {
             recognitionRef.current.start();
-        } catch {
-            // Already started - silently ignore
+        } catch (e) {
+            console.warn('[Speech] Start failed (probably already active/stopping):', e);
+            // If it failed because it's already started, that's fine.
+            // If it failed because it's stopping, the onend handler will see shouldAutoRestartRef=true and restart it.
         }
     }, [isListening]);
 
