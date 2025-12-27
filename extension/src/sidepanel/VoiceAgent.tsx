@@ -31,6 +31,7 @@ export default function VoiceAgent({
     const [audioLevel, setAudioLevel] = useState<number[]>(new Array(16).fill(0));
     const [needsPermission, setNeedsPermission] = useState(false);
     const [hasAttemptedAutoStart, setHasAttemptedAutoStart] = useState(false);
+    const [conversationId, setConversationId] = useState<string | null>(null);
 
     const processingRef = useRef(false);
     const silenceTimeoutRef = useRef<number | null>(null);
@@ -281,18 +282,52 @@ export default function VoiceAgent({
         }
     }, []);
 
-    // Execute actions on current page via content script
-    const executeActions = useCallback(async (actions: Array<{ type: string; elementId?: string; value?: string }>) => {
+    // Execute actions on current page via content script with multi-step support
+    const executeActions = useCallback(async (actions: Array<{
+        type: string;
+        elementId?: string;
+        value?: string;
+        waitForPage?: boolean;
+        needsDom?: boolean;
+        description?: string;
+    }>) => {
         if (!actions || actions.length === 0) return;
 
         try {
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
             if (!tab?.id) return;
 
-            for (const action of actions) {
+            for (let i = 0; i < actions.length; i++) {
+                const action = actions[i];
+                console.log(`[Aeyes] Executing action ${i + 1}/${actions.length}:`, action.description || action.type);
+
+                // If action needs fresh DOM, get it first
+                if (action.needsDom && i > 0) {
+                    console.log('[Aeyes] Getting fresh DOM snapshot...');
+                    // Small delay to let page settle
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+
+                // Execute the action
                 await chrome.tabs.sendMessage(tab.id, { type: 'EXECUTE_ACTION', action });
+
+                // If action requires waiting for page load (e.g., navigation)
+                if (action.waitForPage) {
+                    console.log('[Aeyes] Waiting for page to load...');
+                    // Wait for page to load (simple approach: fixed delay)
+                    // In production, use chrome.tabs.onUpdated or webNavigation API
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+
+                // Small delay between actions for stability
+                if (i < actions.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                }
             }
-        } catch {
+
+            console.log('[Aeyes] All actions completed');
+        } catch (error) {
+            console.error('[Aeyes] Action execution failed:', error);
             // Silently fail - action execution is best-effort
         }
     }, []);
@@ -312,11 +347,17 @@ export default function VoiceAgent({
             // Get DOM context from current page
             const domContext = await extractDOMFromPage();
 
-            // Send transcript AND context to backend
+            // Send transcript AND context to backend with conversation ID
             const response = await sendToBackend({
                 transcript: capitalizedText,
-                context: domContext || undefined
+                context: domContext || undefined,
+                conversation_id: conversationId || undefined
             });
+
+            // Store conversation ID for continuity
+            if (response.conversation_id && !conversationId) {
+                setConversationId(response.conversation_id);
+            }
 
             updateStatus('speaking');
             const audioUrl = await getAudioUrl(response.response);
@@ -334,8 +375,9 @@ export default function VoiceAgent({
 
             audioElementRef.current = null;
 
-            // Execute any actions from Gemini
+            // Execute any actions from Gemini (with multi-step support)
             if (response.actions && response.actions.length > 0) {
+                console.log(`[Aeyes] Executing ${response.actions.length} action(s)...`);
                 await executeActions(response.actions);
             }
 

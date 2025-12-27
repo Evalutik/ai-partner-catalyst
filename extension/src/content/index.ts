@@ -46,9 +46,12 @@ interface DOMSnapshot {
 
 // Types for actions
 interface Action {
-    type: 'click' | 'type' | 'scroll' | 'navigate';
+    type: 'click' | 'type' | 'scroll' | 'navigate' | 'focus';
     elementId?: string;
     value?: string;
+    waitForPage?: boolean;
+    needsDom?: boolean;
+    description?: string;
 }
 
 const AEYES_ID_ATTR = 'data-aeyes-id';
@@ -283,8 +286,30 @@ function actionNavigate(url: string): ActionResult {
     }
 }
 
+// Focus action - set focus on element for accessibility
+function actionFocus(elementId: string): ActionResult {
+    const element = findElementById(elementId);
+    if (!element) {
+        return { success: false, message: `Element not found: ${elementId}` };
+    }
+
+    try {
+        // Focus the element
+        element.focus();
+
+        // Optionally scroll into view
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        return { success: true, message: `Focused element: ${elementId}` };
+    } catch (error) {
+        return { success: false, message: `Focus failed: ${error}` };
+    }
+}
+
 // Main action dispatcher
 function executeAction(action: Action): ActionResult {
+    console.log('[Aeyes Content Script] Executing action:', action.description || action.type);
+
     switch (action.type) {
         case 'click':
             if (!action.elementId) {
@@ -309,6 +334,12 @@ function executeAction(action: Action): ActionResult {
                 return { success: false, message: 'Navigate action requires value (URL)' };
             }
             return actionNavigate(action.value);
+
+        case 'focus':
+            if (!action.elementId) {
+                return { success: false, message: 'Focus action requires elementId' };
+            }
+            return actionFocus(action.elementId);
 
         default:
             return { success: false, message: `Unknown action type: ${(action as any).type}` };

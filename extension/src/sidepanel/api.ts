@@ -3,16 +3,24 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 export interface ConversationRequest {
     transcript: string;
     context?: string;
+    conversation_id?: string;
+}
+
+export interface Action {
+    type: 'click' | 'type' | 'scroll' | 'navigate' | 'focus';
+    elementId?: string;
+    value?: string;
+    waitForPage?: boolean;  // Wait for page navigation/load
+    needsDom?: boolean;     // Need fresh DOM snapshot before executing
+    description?: string;   // What this action does (for logging)
 }
 
 export interface ConversationResponse {
     response: string;
     audioUrl?: string;
-    actions?: Array<{
-        type: 'click' | 'type' | 'scroll' | 'navigate';
-        target?: string;
-        value?: string;
-    }>;
+    actions?: Action[];
+    requiresFollowUp?: boolean;
+    conversation_id?: string;
 }
 
 /**
