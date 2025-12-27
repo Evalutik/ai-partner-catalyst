@@ -19,6 +19,20 @@
         "mac": "Alt+V"
       },
       "description": "Toggle Aeyes voice assistant"
+    },
+    "close-panel": {
+      "suggested_key": {
+        "default": "Alt+C",
+        "mac": "Alt+C"
+      },
+      "description": "Close Aeyes panel"
+    },
+    "reload-conversation": {
+      "suggested_key": {
+        "default": "Alt+B",
+        "mac": "Alt+B"
+      },
+      "description": "Reload conversation"
     }
   },
   "background": {

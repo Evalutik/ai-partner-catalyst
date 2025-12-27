@@ -13,14 +13,25 @@ from dotenv import load_dotenv
 env_path = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(env_path)
 
-# Initialize Gemini
-import google.generativeai as genai
+# Initialize Vertex AI with service account
+import vertexai
+from vertexai.generative_models import GenerativeModel
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel("gemini-3-flash-preview")
-else:
+# Get credentials path from env or use default
+GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", 
+    os.path.join(os.path.dirname(__file__), "..", "project-a20ae662-5941-48ee-a0d-91a6281350f0.json"))
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "project-a20ae662-5941-48ee-a0d")
+LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+try:
+    # Set credentials environment variable
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GOOGLE_CREDENTIALS_PATH
+    
+    # Initialize Vertex AI
+    vertexai.init(project=PROJECT_ID, location=LOCATION)
+    gemini_model = GenerativeModel("gemini-2.0-flash-001")
+except Exception as e:
+    print(f"[Aeyes] Failed to initialize Vertex AI: {e}")
     gemini_model = None
 
 # System prompt for Aeyes agent
@@ -36,11 +47,19 @@ When user asks you to do something, break it into steps and return JSON with thi
   "requiresFollowUp": false
 }
 
+<<<<<<< HEAD
 ACTION TYPES:
 1. navigate - Go to URL: {"type": "navigate", "value": "https://url.com", "waitForPage": true}
 2. type - Type text: {"type": "type", "elementId": "id-from-dom", "value": "text to type", "needsDom": true}
 3. click - Click element: {"type": "click", "elementId": "id-from-dom"}
 4. scroll - Scroll page: {"type": "scroll", "value": "down"}
+=======
+Action types:
+- click: Click an element (requires elementId)
+- type: Type text into an input (requires elementId and value)
+- scroll: Scroll the page (value: "up", "down", "top", "bottom", or elementId to scroll to a heading/section)
+- navigate: Go to a URL (requires value with URL)
+>>>>>>> karaya-branch
 
 EXAMPLES:
 
@@ -180,13 +199,17 @@ No DOM context provided - the user may be on the side panel or asking a general 
 
 Respond with JSON."""
 
-
+        # Build full prompt with system instructions
+        full_prompt = SYSTEM_PROMPT + "\n\n" + prompt
         
-        # Call Gemini with retry logic for rate limits
+        # Call Vertex AI with retry logic for rate limits
         import time
+        from vertexai.generative_models import GenerationConfig
+        
         max_retries = 3
         for attempt in range(max_retries):
             try:
+<<<<<<< HEAD
                 chat = gemini_model.start_chat(history=[])
                 response = chat.send_message(
                     SYSTEM_PROMPT + "\n\n" + prompt,
@@ -194,13 +217,19 @@ Respond with JSON."""
                         temperature=0.3,  # Lower temperature for more consistent JSON
                         max_output_tokens=2048,  # Increased from 500 to allow complete responses
                         response_mime_type="application/json"  # Force JSON output
+=======
+                response = gemini_model.generate_content(
+                    full_prompt,
+                    generation_config=GenerationConfig(
+                        temperature=0.7,
+                        max_output_tokens=500,
+>>>>>>> karaya-branch
                     )
                 )
                 break  # Success, exit retry loop
             except Exception as retry_error:
                 if "quota" in str(retry_error).lower() or "rate" in str(retry_error).lower():
                     wait_time = (attempt + 1) * 5  # 5s, 10s, 15s
-
                     time.sleep(wait_time)
                     if attempt == max_retries - 1:
                         raise  # Re-raise on final attempt
