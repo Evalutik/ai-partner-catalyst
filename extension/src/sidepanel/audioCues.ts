@@ -71,3 +71,21 @@ export async function playDoneSound(): Promise<void> {
 export async function playErrorSound(): Promise<void> {
     await playTone(150, 0.2, 'sawtooth');
 }
+
+/**
+ * Mute/deafen sound - descending sweep (listening paused)
+ */
+export async function playMuteSound(): Promise<void> {
+    await playTone(440, 0.08); // A4
+    await playTone(330, 0.08); // E4
+    await playTone(220, 0.12); // A3
+}
+
+/**
+ * Unmute/undeafen sound - ascending sweep (listening resumed)
+ */
+export async function playUnmuteSound(): Promise<void> {
+    await playTone(220, 0.08); // A3
+    await playTone(330, 0.08); // E4
+    await playTone(440, 0.12); // A4
+}

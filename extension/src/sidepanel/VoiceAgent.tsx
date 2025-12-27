@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useSpeechRecognition } from './useSpeechRecognition';
 import { sendToBackend, getAudioUrl } from './api';
-import { playStartupSound, playListeningSound, playDoneSound } from './audioCues';
+import { playStartupSound, playListeningSound, playDoneSound, playMuteSound, playUnmuteSound } from './audioCues';
 import LockIcon from './LockIcon';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
@@ -33,6 +33,7 @@ export default function VoiceAgent({
     const [needsPermission, setNeedsPermission] = useState(false);
     const [hasAttemptedAutoStart, setHasAttemptedAutoStart] = useState(false);
     const [conversationId, setConversationId] = useState<string | null>(null);
+    const [isPaused, setIsPaused] = useState(false); // Listening paused by user
 
     const processingRef = useRef(false);
     const silenceTimeoutRef = useRef<number | null>(null);
@@ -363,16 +364,15 @@ export default function VoiceAgent({
                 conversation_id: conversationId || undefined
             });
 
-<<<<<<< HEAD
             // Store conversation ID for continuity
             if (response.conversation_id && !conversationId) {
                 setConversationId(response.conversation_id);
-=======
+            }
+
             // Execute actions IMMEDIATELY (before audio plays)
             // This ensures navigation/clicks happen right away
             if (response.actions && response.actions.length > 0) {
                 await executeActions(response.actions);
->>>>>>> karaya-branch
             }
 
             updateStatus('speaking');
@@ -391,17 +391,14 @@ export default function VoiceAgent({
 
             audioElementRef.current = null;
 
-<<<<<<< HEAD
             // Execute any actions from Gemini (with multi-step support)
             if (response.actions && response.actions.length > 0) {
-                console.log(`[Aeyes] Executing ${response.actions.length} action(s)...`);
                 await executeActions(response.actions);
             }
-=======
+
             // Audio cue: done speaking, now listening again
             await playDoneSound();
             await playListeningSound();
->>>>>>> karaya-branch
 
             updateStatus('listening');
         } catch (err) {
@@ -436,6 +433,23 @@ export default function VoiceAgent({
         }
     };
 
+    // Toggle pause/resume listening
+    const handlePauseToggle = useCallback(async () => {
+        if (isPaused) {
+            // Resume listening
+            await playUnmuteSound();
+            setIsPaused(false);
+            startListening();
+            updateStatus('listening');
+        } else {
+            // Pause listening
+            await playMuteSound();
+            setIsPaused(true);
+            stopListening();
+            updateStatus('idle');
+        }
+    }, [isPaused, startListening, stopListening, updateStatus]);
+
     if (!isSupported) {
         return <div className="error-text">Speech recognition not supported</div>;
     }
@@ -457,7 +471,17 @@ export default function VoiceAgent({
                 ))}
             </div>
 
-            {/* Button removed for accessibility - agent auto-starts with voice */}
+            {/* Pause/Resume Toggle Button */}
+            {!needsPermission && (
+                <button
+                    onClick={handlePauseToggle}
+                    className={`btn-voice ${isPaused ? 'btn-voice-idle' : 'btn-voice-listening'}`}
+                    aria-label={isPaused ? 'Start listening' : 'Stop listening'}
+                >
+                    {isPaused ? <MicIcon /> : <StopIcon />}
+                    <span>{isPaused ? 'Start' : 'Stop'}</span>
+                </button>
+            )}
 
             {/* Permission Request */}
             {needsPermission && (
@@ -486,5 +510,23 @@ export default function VoiceAgent({
                 <p className="error-text animate-fade-in">{error}</p>
             )}
         </div>
+    );
+}
+
+function MicIcon() {
+    return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" x2="12" y1="19" y2="22" />
+        </svg>
+    );
+}
+
+function StopIcon() {
+    return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="4" y="4" width="16" height="16" rx="2" />
+        </svg>
     );
 }
