@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import VoiceAgent from './VoiceAgent';
 import AnimatedMessage from './AnimatedMessage';
 
@@ -16,6 +16,26 @@ export default function App() {
     const messagesTopRef = useRef<HTMLDivElement>(null);
 
     const [streamingText, setStreamingText] = useState('');
+    const [reloadKey, setReloadKey] = useState(0);
+
+    // Listen for keyboard shortcut commands from background script
+    useEffect(() => {
+        const handleMessage = (message: { type: string }) => {
+            if (message.type === 'CLOSE_PANEL') {
+                window.close();
+            }
+            if (message.type === 'RELOAD_CONVERSATION') {
+                // Clear messages and reload VoiceAgent
+                setMessages([]);
+                setStreamingText('');
+                setAutoStarted(false);
+                setReloadKey(prev => prev + 1);
+            }
+        };
+
+        chrome.runtime.onMessage.addListener(handleMessage);
+        return () => chrome.runtime.onMessage.removeListener(handleMessage);
+    }, []);
 
     const handleTranscript = (text: string) => {
         setStreamingText(''); // Clear streaming text when final transcript is received
@@ -41,6 +61,7 @@ export default function App() {
             {/* Voice Control */}
             <section className="shrink-0">
                 <VoiceAgent
+                    key={reloadKey}
                     onStatusChange={setStatus}
                     onTranscript={handleTranscript}
                     onStreamingTranscript={setStreamingText}

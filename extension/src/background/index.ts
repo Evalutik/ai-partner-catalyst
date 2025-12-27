@@ -1,6 +1,6 @@
 // Background service worker - handles hotkey and message routing
 
-// Open side panel when command is triggered
+// Handle keyboard commands
 chrome.commands.onCommand.addListener((command: string) => {
     if (command === 'toggle-side-panel') {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -8,6 +8,16 @@ chrome.commands.onCommand.addListener((command: string) => {
                 chrome.sidePanel.open({ tabId: tabs[0].id });
             }
         });
+    }
+
+    if (command === 'close-panel') {
+        // Send close message to sidepanel - it will handle cleanup
+        chrome.runtime.sendMessage({ type: 'CLOSE_PANEL' });
+    }
+
+    if (command === 'reload-conversation') {
+        // Send reload message to sidepanel to reset conversation
+        chrome.runtime.sendMessage({ type: 'RELOAD_CONVERSATION' });
     }
 });
 

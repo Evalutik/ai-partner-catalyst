@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useSpeechRecognition } from './useSpeechRecognition';
 import { sendToBackend, getAudioUrl } from './api';
+import { playStartupSound, playListeningSound, playDoneSound } from './audioCues';
 import LockIcon from './LockIcon';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
@@ -193,6 +194,8 @@ export default function VoiceAgent({
             silenceTimeoutRef.current = window.setTimeout(async () => {
                 const newText = transcript.slice(lastTranscript.length).trim();
                 if (newText && !processingRef.current) {
+                    // Audio cue: user finished speaking
+                    await playDoneSound();
                     await processTranscript(newText);
                 }
             }, 1500);
@@ -208,6 +211,9 @@ export default function VoiceAgent({
         setHasGreeted(true);
 
         try {
+            // Play startup sound first for blind users
+            await playStartupSound();
+
             updateStatus('speaking');
 
             const greetingText = "Hi, I'm Aeyes. How can I help you?";
@@ -228,10 +234,13 @@ export default function VoiceAgent({
 
             audioElementRef.current = null;
 
+            // Play done sound after speaking
+            await playDoneSound();
 
             // Seamless transition to listening
             const success = await startAudioVisualization();
             if (success) {
+                await playListeningSound(); // Audio cue for listening start
                 updateStatus('listening');
                 startListening();
             } else {
@@ -242,7 +251,7 @@ export default function VoiceAgent({
             console.warn("Greeting failed", e);
             updateStatus('idle');
         }
-    }, [hasGreeted, updateStatus, startListening, startAudioVisualization]);
+    }, [hasGreeted, updateStatus, startListening, startAudioVisualization, onResponse]);
 
     useEffect(() => {
         // Check initial permission state
@@ -340,6 +349,10 @@ export default function VoiceAgent({
 
             audioElementRef.current = null;
 
+            // Audio cue: done speaking, now listening again
+            await playDoneSound();
+            await playListeningSound();
+
             updateStatus('listening');
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed');
@@ -361,25 +374,6 @@ export default function VoiceAgent({
         chrome.tabs.create({ url });
     }, []);
 
-    const handleStart = useCallback(async () => {
-        setError(null);
-        setLastTranscript('');
-        const success = await startAudioVisualization();
-        if (success) {
-            startListening();
-            updateStatus('listening');
-        }
-    }, [startListening, startAudioVisualization, updateStatus]);
-
-    const handleStop = useCallback(() => {
-        stopListening();
-        stopAudioVisualization();
-        stopAudio();  // Also stop any playing audio
-        updateStatus('idle');
-        processingRef.current = false;
-        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
-    }, [stopListening, stopAudioVisualization, stopAudio, updateStatus]);
-
     const isActive = status !== 'idle';
 
     // Get color for current state
@@ -389,24 +383,6 @@ export default function VoiceAgent({
             case 'processing': return 'var(--color-processing)';
             case 'speaking': return 'var(--color-speaking)';
             default: return 'var(--color-idle)';
-        }
-    };
-
-    const getButtonClass = () => {
-        switch (status) {
-            case 'listening': return 'btn-voice btn-voice-listening';
-            case 'processing': return 'btn-voice btn-voice-processing';
-            case 'speaking': return 'btn-voice btn-voice-speaking';
-            default: return 'btn-voice btn-voice-idle';
-        }
-    };
-
-    const getButtonText = () => {
-        switch (status) {
-            case 'listening': return 'Listening...';
-            case 'processing': return 'Thinking...';
-            case 'speaking': return 'Speaking...';
-            default: return 'Start';
         }
     };
 
@@ -431,16 +407,7 @@ export default function VoiceAgent({
                 ))}
             </div>
 
-            {/* Single button - toggles or starts. Hidden if permission needed */}
-            {!needsPermission && (
-                <button
-                    onClick={isActive ? handleStop : handleStart}
-                    className={getButtonClass()}
-                >
-                    {isActive ? <StopIcon /> : <MicIcon />}
-                    <span>{isActive ? 'Stop' : getButtonText()}</span>
-                </button>
-            )}
+            {/* Button removed for accessibility - agent auto-starts with voice */}
 
             {/* Permission Request */}
             {needsPermission && (
@@ -469,23 +436,5 @@ export default function VoiceAgent({
                 <p className="error-text animate-fade-in">{error}</p>
             )}
         </div>
-    );
-}
-
-function MicIcon() {
-    return (
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <line x1="12" x2="12" y1="19" y2="22" />
-        </svg>
-    );
-}
-
-function StopIcon() {
-    return (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="4" y="4" width="16" height="16" rx="2" />
-        </svg>
     );
 }
