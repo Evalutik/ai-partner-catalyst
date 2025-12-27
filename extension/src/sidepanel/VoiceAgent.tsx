@@ -40,6 +40,7 @@ export default function VoiceAgent({
     const audioElementRef = useRef<HTMLAudioElement | null>(null);
     const processingRef = useRef(false);
     const speakingRef = useRef(false); // Synchronous speaking state
+    const lastSpokenTextRef = useRef<string>(''); // For echo cancellation
     const silenceTimeoutRef = useRef<number | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const analyserRef = useRef<AnalyserNode | null>(null);
@@ -228,6 +229,12 @@ export default function VoiceAgent({
         // transcript is automatically reset by startListening(), so we can use it directly
         const fullCurrentText = (transcript + interimTranscript).trim();
 
+        // Echo Masking: Don't show text if it matches what we just said
+        if (lastSpokenTextRef.current && fullCurrentText.toLowerCase().includes(lastSpokenTextRef.current)) {
+            onStreamingTranscript?.(''); // Hide from UI
+            return;
+        }
+
         if (fullCurrentText) {
             const capitalizedText = fullCurrentText.charAt(0).toUpperCase() + fullCurrentText.slice(1);
             onStreamingTranscript?.(capitalizedText);
@@ -246,16 +253,22 @@ export default function VoiceAgent({
 
                 const newText = transcript.trim();
                 if (newText) {
+                    // Echo Cancellation: simple check
+                    // If the recognized text is very similar to what was just spoken, ignore it (self-hearing)
+                    if (lastSpokenTextRef.current && newText.toLowerCase().includes(lastSpokenTextRef.current)) {
+                        console.log('[Aeyes] Ignored self-hearing:', newText);
+                        // Force clear the transcript so we don't process it later
+                        startListening(); // Reset
+                        return;
+                    }
+
                     // Audio cue: user finished speaking
                     await playDoneSound();
                     await processTranscript(newText);
                 }
-            }, 1500);
+            }, 1000);
         }
 
-        return () => {
-            if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
-        };
         return () => {
             if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
         };
@@ -297,6 +310,14 @@ export default function VoiceAgent({
         });
     }, [onPermissionRequired, hasGreeted, playGreeting]);
 
+    // Ref to track paused state in async functions
+    const isPausedRef = useRef(isPaused);
+    const stoppedManuallyRef = useRef(false); // Track manual stop to avoid race conditions
+    useEffect(() => {
+        isPausedRef.current = isPaused;
+        if (!isPaused) stoppedManuallyRef.current = false;
+    }, [isPaused]);
+
     // Get DOM from current page via content script
     const extractDOMFromPage = useCallback(async (): Promise<string | null> => {
         try {
@@ -312,6 +333,18 @@ export default function VoiceAgent({
             return null;
         }
     }, []);
+
+    // DOM extraction with stricter null handling
+    const extractDOMWithRetry = useCallback(async (): Promise<string | null> => {
+        let attempts = 0;
+        while (attempts < 2) {
+            const dom = await extractDOMFromPage();
+            if (dom) return dom;
+            await new Promise(r => setTimeout(r, 500));
+            attempts++;
+        }
+        return null;
+    }, [extractDOMFromPage]);
 
     // Execute actions on current page via content script with multi-step support
     // Returns execution result for adaptive error handling
@@ -472,6 +505,7 @@ export default function VoiceAgent({
     const processTranscript = useCallback(async (text: string) => {
         if (processingRef.current) return;
         processingRef.current = true;
+        stoppedManuallyRef.current = false; // Reset start
 
         // Stop listening during processing phase
         abortListening();
@@ -481,27 +515,42 @@ export default function VoiceAgent({
 
         updateStatus('processing');
 
-        const MAX_TOTAL_STEPS = 10;
+        const MAX_TOTAL_STEPS = 5; // Reduced to 5 to avoid long loops
         const MAX_CONSECUTIVE_FAILURES = 3;
 
         let stepCount = 0;
         let consecutiveFailures = 0;
         let currentTranscript = capitalizedText;
         let finalResponseText = '';
+        let loopDomContext: string | null = null; // Track DOM across loop
+        let response: any = null; // Store response across iterations
 
         try {
             while (stepCount < MAX_TOTAL_STEPS) {
+                // Check if user stopped manually during loop
+                if (stoppedManuallyRef.current) break;
+
                 stepCount++;
 
                 // 1. Get DOM context from current page
-                let domContext = await extractDOMFromPage();
+                loopDomContext = await extractDOMWithRetry();
+
+                // Safety: If follow-up requested but NO DOM, break loop to prevent infinite recursion
+                if (stepCount > 1 && !loopDomContext && !response?.actions?.length) {
+                    console.warn('[Aeyes] Infinite loop risk: Follow-up requested but no DOM available.');
+                    finalResponseText = "I can't see the page content right now. Please make sure you're on an accessible web page.";
+                    break;
+                }
+
 
                 // 2. Send transcript AND context to backend with conversation ID
-                let response = await sendToBackend({
+                response = await sendToBackend({
                     transcript: currentTranscript,
-                    context: domContext || undefined,
+                    context: loopDomContext || undefined,
                     conversation_id: conversationId || undefined
                 });
+
+                if (stoppedManuallyRef.current) break;
 
                 // Store conversation ID for continuity
                 if (response.conversation_id && !conversationId) {
@@ -513,6 +562,8 @@ export default function VoiceAgent({
                 if (response.actions && response.actions.length > 0) {
                     actionResult = await executeActions(response.actions);
                 }
+
+                if (stoppedManuallyRef.current) break;
 
                 // 4. Handle Failure
                 if (!actionResult.success) {
@@ -556,6 +607,12 @@ export default function VoiceAgent({
                 break;
             }
 
+            if (stoppedManuallyRef.current) {
+                updateStatus('idle');
+                processingRef.current = false;
+                return;
+            }
+
             // Exited loop. Check if we failed to get a final response.
             if (!finalResponseText) {
                 if (stepCount >= MAX_TOTAL_STEPS) {
@@ -572,27 +629,34 @@ export default function VoiceAgent({
             speakingRef.current = true;
             const audioUrl = await getAudioUrl(finalResponseText);
 
+            if (stoppedManuallyRef.current) { updateStatus('idle'); return; }
+
             const audio = new Audio(audioUrl);
             audioElementRef.current = audio;
+            lastSpokenTextRef.current = finalResponseText.trim().toLowerCase(); // Store for echo cancellation
 
             onResponse?.(finalResponseText);
 
             await new Promise<void>((resolve) => {
-                audio.onended = () => resolve();
-                audio.onerror = () => resolve();
-                audio.play().catch(() => resolve());
+                const finish = () => {
+                    resolve();
+                };
+                audio.onended = finish;
+                audio.onpause = finish; // Resolve on pause (Stop button) to unblock the loop
+                audio.onerror = finish;
+                audio.play().catch(() => finish());
             });
 
             audioElementRef.current = null;
             speakingRef.current = false;
 
             // Restart listening if not paused
-            if (!isPausedRef.current) {
+            // CRITICAL: Check stoppedManuallyRef instead of just isPausedRef
+            if (!stoppedManuallyRef.current && !isPausedRef.current) {
                 // Wait delay to ensure audio is fully done and avoid self-hearing
-                await new Promise(resolve => setTimeout(resolve, 1500));
+                await new Promise(resolve => setTimeout(resolve, 500));
 
-                // Check again after delay
-                if (!isPausedRef.current) {
+                if (!stoppedManuallyRef.current && !isPausedRef.current) {
                     await playDoneSound();
                     await playListeningSound();
                     startListening();
@@ -625,8 +689,7 @@ export default function VoiceAgent({
                 speakingRef.current = false;
             } catch (e) { /* ignore audio error */ }
 
-            if (!isPaused) {
-                stopListening(); // Make sure we stop in error state or reset?
+            if (!isPaused && !stoppedManuallyRef.current) {
                 // Wait small delay here too
                 await new Promise(resolve => setTimeout(resolve, 1000));
 
@@ -640,7 +703,7 @@ export default function VoiceAgent({
         } finally {
             processingRef.current = false;
         }
-    }, [transcript, onTranscript, onResponse, updateStatus, extractDOMFromPage, executeActions, isPaused, abortListening, stopListening, startListening, conversationId]);
+    }, [transcript, onTranscript, onResponse, updateStatus, extractDOMWithRetry, executeActions, isPaused, abortListening, stopListening, startListening, conversationId]);
 
 
     const openPermissionPage = useCallback(async () => {
@@ -667,16 +730,13 @@ export default function VoiceAgent({
         }
     };
 
-    // Ref to track paused state in async functions
-    const isPausedRef = useRef(isPaused);
-    useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
-
     // Toggle pause/resume listening
     const handlePauseToggle = useCallback(async () => {
         if (isPaused) {
             // Resume listening
             await playUnmuteSound();
             setIsPaused(false);
+            stoppedManuallyRef.current = false;
             // State update will trigger ref update, but for immediate logic we can assume false
             startListening();
             updateStatus('listening');
@@ -684,6 +744,7 @@ export default function VoiceAgent({
             // Pause listening AND stop speaking
             await playMuteSound();
             setIsPaused(true);
+            stoppedManuallyRef.current = true; // Set manual stop flag to prevent race conditions
             stopAudio(); // Stop any current speech
             stopListening();
             updateStatus('idle');
