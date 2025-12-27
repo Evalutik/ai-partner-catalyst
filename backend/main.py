@@ -65,14 +65,40 @@ ACTION TYPES:
 1. navigate - Go to URL: {"type": "navigate", "value": "https://url.com", "waitForPage": true, "newTab": true}
    - Use "newTab": true (default) when user says "open", "open in new tab", etc.
    - Use "newTab": false when user says "go to", "navigate to" in current tab
-2. type - Type text: {"type": "type", "description": "what element to find", "value": "text to type", "needsDom": true}
-3. click - Click element: {"type": "click", "description": "what element to click", "needsDom": true}
+2. type - Type text: {"type": "type", "elementId": "el-123", "value": "text to type"}
+   - Fallback (only if ID unknown): {"type": "type", "description": "search box", "value": "text", "needsDom": true}
+3. click - Click element: {"type": "click", "elementId": "el-123", "description": "Submit Button"}
+   - ALWAYS include `description` (text/label) as a backup in case the ID changes.
 4. scroll - Scroll page: {"type": "scroll", "value": "down"}
+5. search - Find text on page: {"type": "search", "value": "Exact text to find"}
+   - Use this when you can't see the element you need in the current view.
+6. read - Read full text: {"type": "read", "elementId": "el-123"}
 
-NOTE: For actions with needsDom: true, use "description" (human-readable) instead of "elementId".
-The system will find the actual element ID from the page DOM.
+NOTE: ALWAYS PREFER "elementId" if the element is in the `elements` list.
+Only use "description" + "needsDom: true" if the element is NOT in the list.
 
 EXAMPLES:
+
+User: "Find the price of the Sony camera"
+YOU MUST RETURN:
+{
+  "response": "Searching for the price...",
+  "actions": [
+    {"type": "search", "value": "Price"}
+  ],
+  "requiresFollowUp": true
+}
+
+User: "Read the first paragraph"
+(Assuming el-10 text is truncated)
+YOU MUST RETURN:
+{
+  "response": "Reading the full paragraph for you...",
+  "actions": [
+    {"type": "read", "elementId": "el-10"}
+  ],
+  "requiresFollowUp": false
+}
 
 User: "Go to YouTube and search for cats"
 YOU MUST RETURN:
@@ -83,24 +109,6 @@ YOU MUST RETURN:
     {"type": "type", "description": "search input box", "value": "cats", "needsDom": true},
     {"type": "click", "description": "search button", "needsDom": true}
   ],
-  "requiresFollowUp": false
-}
-
-User: "Open Google"
-YOU MUST RETURN:
-{
-  "response": "Opening Google for you. Anything else?",
-  "actions": [
-    {"type": "navigate", "value": "https://google.com", "waitForPage": true, "newTab": true}
-  ],
-  "requiresFollowUp": false
-}
-
-User: "Hello"
-YOU MUST RETURN:
-{
-  "response": "Hi! How can I help you today?",
-  "actions": [],
   "requiresFollowUp": false
 }
 
@@ -124,6 +132,8 @@ REMEMBER:
 - CRITICAL: Before finishing, verify you fulfilled the user's ENTIRE request. 
   * Example: if user said "open video", merely searching is NOT enough. You must click the video.
   * If the goal is not fully reached, return requiresFollowUp: true to continue.
+- ANTI-LOOP RULE: Do not respond with "I am analyzing" or "I am reading the page" unless you are also issuing an action (like scroll/search). If you have the data, ANSWER THE USER.
+- SEMANTIC INTERPRETATION: If user asks for "recommendations" and you are on a shopping site but not logged in, interpret this as "featured products" or "categories" visible on the page. Do not refuse just because of login status.
 - Response with JSON ONLY - nothing else!"""
 
 app = FastAPI(title="Aeyes Backend")
@@ -144,7 +154,7 @@ conversation_history = {}
 
 class ConversationRequest(BaseModel):
     transcript: str
-    context: str | None = None  # DOM snapshot as JSON string
+    context: dict | None = None  # DOM snapshot as JSON object (not string)
     conversation_id: str | None = None  # For maintaining conversation history
 
 
@@ -212,12 +222,35 @@ async def conversation(request: ConversationRequest):
                 history_text += f"{role}: {msg['content']}\n"
 
         if request.context:
+            # Format dict context to pretty JSON string for the prompt
+            context_str = json.dumps(request.context, indent=2)
+            
+            # Check for continuation and retrieve original goal
+            additional_context = ""
+            if user_text.startswith("[Continue"):
+                # Find the last user message that WASN'T a continue instruction
+                original_goal = "Analyze the page" # Default
+                for msg in reversed(history[:-1]): # Skip current
+                    if msg["role"] == "user" and not msg["content"].startswith("[Continue"):
+                        original_goal = msg["content"]
+                        break
+                additional_context = f"\nPENDING GOAL: \"{original_goal}\"\n(The user is waiting for this goal to be completed. Do not ask for new instructions - EXECUTE IT.)"
+
             prompt = f"""User request: "{user_text}"
+{additional_context}
 {history_text}
 Current page DOM (interactive elements):
-{request.context}
+{context_str}
 
-Analyze the request and DOM, then respond with JSON."""
+Analyze the request and DOM, then respond with JSON.
+CRITICAL: If the user request is "[Continue...]", you MUST use the PENDING GOAL to determine your next action.
+- DOM ACTION PRIORITY: Scan `elements` list. If you find a matching element (e.g. video title containing "music"), YOU MUST USE ITS `elementId` (e.g. "el-302").
+- NO DESCRIPTION: Do NOT use "description" if you have the `elementId`. Using `elementId` is instant and reliable. Only use "description" if you are guessing.
+- FUZZY MATCHING: If the user asks for "any [X]", click ANY valid link that contains [X] in its text or label.
+- NO BLIND SCROLLING: Do not scroll if a viable candidate is ALREADY in the `elements` list.
+- If you see the information needed to answer the user, provide the ANSWER in the "response" field and set requiresFollowUp: false.
+- If you need to find text that isn't visible, return a "search" action.
+- DO NOT just say "I am analyzing". TAKE ACTION or ANSWER."""
         else:
             prompt = f"""User request: "{user_text}"
 {history_text}
@@ -416,7 +449,7 @@ async def speak(request: SpeakRequest):
         raise HTTPException(status_code=500, detail=error_msg)
 
 class ResolveElementRequest(BaseModel):
-    dom_context: str  # DOM snapshot as JSON string
+    dom_context: dict  # DOM snapshot as JSON object
     action_type: str  # type of action (click, type, etc.)
     action_description: str  # what element to find (e.g., "search input", "submit button")
     action_value: str | None = None  # for type actions, the text to type
@@ -444,7 +477,7 @@ async def resolve_element(request: ResolveElementRequest):
     resolve_prompt = f"""You are a DOM element finder. Given a DOM snapshot, find the element that matches the description.
 
 DOM CONTEXT:
-{request.dom_context}
+{json.dumps(request.dom_context, indent=2)}
 
 TASK: Find the element for: {request.action_description}
 Action type: {request.action_type}

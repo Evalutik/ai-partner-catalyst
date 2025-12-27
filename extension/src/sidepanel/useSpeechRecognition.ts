@@ -28,6 +28,7 @@ declare global {
     interface Window {
         webkitSpeechRecognition: new () => SpeechRecognition;
         SpeechRecognition: new () => SpeechRecognition;
+        find: (text: string) => boolean; // Add find method
     }
 }
 
@@ -67,6 +68,8 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
 
         recognition.onstart = () => {
             setIsListening(true);
+            setTranscript('');
+            setInterimTranscript('');
             setError(null);
         };
 
@@ -178,6 +181,8 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
             // Already stopped
         }
         setIsListening(false);
+        setTranscript(''); // Explicitly clear
+        setInterimTranscript('');
     }, []);
 
     const abort = useCallback(() => {
@@ -190,6 +195,8 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
             // Already stopped
         }
         setIsListening(false);
+        setTranscript(''); // Explicitly clear
+        setInterimTranscript('');
     }, []);
 
     return {

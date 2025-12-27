@@ -27,6 +27,15 @@ export interface ConversationResponse {
  * Send user transcript to backend, get response + optional actions
  */
 export async function sendToBackend(request: ConversationRequest): Promise<ConversationResponse> {
+    const logPayload: any = { ...request };
+    try {
+        if (logPayload.context) {
+            logPayload.context = JSON.parse(logPayload.context);
+        }
+    } catch (e) { /* ignore parse error for logging */ }
+
+    console.log('[Aeyes Network] 📤 SENDING Payload:', JSON.stringify(logPayload, null, 2));
+
     const response = await fetch(`${BACKEND_URL}/conversation`, {
         method: 'POST',
         headers: {
@@ -39,7 +48,9 @@ export async function sendToBackend(request: ConversationRequest): Promise<Conve
         throw new Error(`Backend error: ${response.status}`);
     }
 
-    return response.json();
+    const json = await response.json();
+    console.log('[Aeyes Network] 📥 RECEIVED Response:', JSON.stringify(json, null, 2));
+    return json;
 }
 
 /**

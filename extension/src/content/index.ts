@@ -9,21 +9,15 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (message.type === 'EXECUTE_ACTION') {
-            const result = executeAction(message.action as Action);
-            sendResponse(result);
+            executeAction(message.action as Action).then(result => sendResponse(result));
+            return true; // async response
         }
 
         return true;
     }
 );
 
-/* data types:
-ExtractedElement - element from the DOM (button/link/input etc)
-DOMSnapshot - DOM snapshot ( JSON, url, title, elements list )
-Action - action AI will tell the extension to do
-*/
-
-// Extracted elements types
+/* data types */
 interface ExtractedElement {
     id: string;
     tagName: string;
@@ -35,6 +29,7 @@ interface ExtractedElement {
     alt?: string;
     value?: string;
     checked?: boolean;
+    truncated?: boolean;
 }
 
 interface DOMSnapshot {
@@ -44,47 +39,44 @@ interface DOMSnapshot {
     message?: string;
 }
 
-// Types for actions
 interface Action {
-    type: 'click' | 'type' | 'scroll' | 'navigate' | 'focus';
+    type: 'click' | 'type' | 'scroll' | 'navigate' | 'focus' | 'search' | 'read';
     elementId?: string;
     value?: string;
     waitForPage?: boolean;
-    needsDom?: boolean;
     description?: string;
+}
+
+interface ActionResult {
+    success: boolean;
+    message: string;
+    data?: any;
 }
 
 const AEYES_ID_ATTR = 'data-aeyes-id';
 let elementCounter = 0;
 
-// Helper to check if an element is visible and truly interactive for the user
+// --- Helper Functions ---
+
 function isVisible(el: HTMLElement): boolean {
-    // 1. Check using modern browser API if available (Chrome 105+)
-    // This handles display: none, visibility: hidden, and opacity: 0 automatically
+    // This can be expensive, wrap in try/catch if needed, but it's usually safe on single elements
     if ((el as any).checkVisibility) {
         if (!(el as any).checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
             return false;
         }
     }
-
     const rect = el.getBoundingClientRect();
     const style = window.getComputedStyle(el);
-
     return (
-        // 2. Element must have dimensions
         rect.width > 0 && rect.height > 0 &&
-        // 3. Fallback for older environments or specific CSS checks
         style.visibility !== 'hidden' &&
         style.display !== 'none' &&
         style.opacity !== '0' &&
-        // 4. Must allow pointer events (not disabled by CSS)
         style.pointerEvents !== 'none' &&
-        // 5. Must not be hidden from screen readers/accessibility tree
         el.getAttribute('aria-hidden') !== 'true'
     );
 }
 
-// Helper to get or create a unique ID for an element
 function getAeyesId(el: HTMLElement): string {
     let id = el.getAttribute(AEYES_ID_ATTR);
     if (!id) {
@@ -94,172 +86,300 @@ function getAeyesId(el: HTMLElement): string {
     return id;
 }
 
-// Helper to find the most relevant label text for an element
 function getAssociatedLabel(el: HTMLElement): string | undefined {
-    // 1. Check aria-label
     const ariaLabel = el.getAttribute('aria-label');
     if (ariaLabel) return ariaLabel;
 
-    // 2. Check aria-labelledby
     const labelledBy = el.getAttribute('aria-labelledby');
     if (labelledBy) {
         const labelEl = document.getElementById(labelledBy);
         if (labelEl) return labelEl.innerText.trim();
     }
 
-    // 3. For form elements, check associated <label> tags
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
-        // Find label by 'for' attribute
         if (el.id) {
             const labelFor = document.querySelector(`label[for="${el.id}"]`) as HTMLElement;
             if (labelFor) return labelFor.innerText.trim();
         }
-        // Find parent label
         const parentLabel = el.closest('label') as HTMLElement;
         if (parentLabel) return parentLabel.innerText.trim();
     }
-
-    // 4. Fallback to title
     return el.title || undefined;
 }
 
-// Main function to extract interactive elements from the DOM
-function extractDOM(): DOMSnapshot {
-    const interactiveSelectors = [
-        // Interactive elements
-        'a', 'button', 'input', 'select', 'textarea',
-        '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="menuitem"]',
-        '[role="tab"]', '[role="radio"]', '[role="switch"]', '[role="treeitem"]',
-        '[onclick]', '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])',
-        // Headings for navigation (Wikipedia sections, etc.)
-        'h1', 'h2', 'h3', 'h4', 'h5', 'h6'
-    ].join(',');
-
-    const elements = Array.from(document.querySelectorAll(interactiveSelectors)) as HTMLElement[];
-    const extracted: ExtractedElement[] = [];
-
-    for (const el of elements) {
-        if (!isVisible(el)) continue;
-
-        const baseElement = {
-            id: getAeyesId(el),
-            tagName: el.tagName.toLowerCase(),
-            role: el.getAttribute('role') || undefined,
-            // Truncate all text fields to 100 chars to save tokens
-            text: el.innerText.trim().substring(0, 100) || undefined,
-            label: getAssociatedLabel(el)?.substring(0, 100),
-            placeholder: ((el as any).placeholder as string | undefined)?.substring(0, 100),
-            alt: ((el as any).alt as string | undefined)?.substring(0, 100),
-            value: ((el as any).value as string | undefined)?.substring(0, 100),
-            checked: (el as any).checked,
-        };
-
-        // Add 'type' for input elements
-        if (el instanceof HTMLInputElement) {
-            extracted.push({ ...baseElement, type: el.type });
-        } else {
-            extracted.push(baseElement);
-        }
-
-        // Hard limit to top 100 elements for token efficiency
-        if (extracted.length >= 100) break;
-    }
-
-    return {
-        url: window.location.href,
-        title: document.title,
-        elements: extracted,
-        message: 'DOM extraction completed',
-    };
-}
-
-// Action result type
-interface ActionResult {
-    success: boolean;
-    message: string;
-}
-
-// Helper to find element by our assigned ID
 function findElementById(elementId: string): HTMLElement | null {
     return document.querySelector(`[${AEYES_ID_ATTR}="${elementId}"]`) as HTMLElement | null;
 }
 
-// Click action - find element and trigger click
-function actionClick(elementId: string): ActionResult {
-    const element = findElementById(elementId);
-    if (!element) {
-        return { success: false, message: `Element not found: ${elementId}` };
-    }
+// --- DOM Extraction Logic ---
 
+function extractDOM(): DOMSnapshot {
+    console.log('[Aeyes Content] Starting DOM extraction...');
+    const startTime = performance.now();
     try {
-        // Focus first (important for accessibility)
-        element.focus();
+        // 1. FAST SELECTORS: Interactive elements + Headings
+        const interactiveSelectors = [
+            'a', 'button', 'input', 'select', 'textarea',
+            '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="menuitem"]',
+            '[role="tab"]', '[role="radio"]', '[role="switch"]', '[role="treeitem"]',
+            '[onclick]', '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])',
+            'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'
+        ].join(',');
 
-        // Trigger click
-        element.click();
+        const candidateSet = new Set<HTMLElement>();
 
-        return { success: true, message: `Clicked element: ${elementId}` };
-    } catch (error) {
-        return { success: false, message: `Click failed: ${error}` };
+        const initial = document.querySelectorAll(interactiveSelectors);
+        console.log(`[Aeyes Content] Initial selectors found: ${initial.length}`);
+
+        initial.forEach(el => {
+            candidateSet.add(el as HTMLElement);
+        });
+
+        // 2. TREE WALKER: Efficiently find text nodes
+        console.log('[Aeyes Content] Starting TreeWalker...');
+        const walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: (node) => {
+                    if (!node.textContent || node.textContent.trim().length < 3) {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    if (node.parentElement) {
+                        const style = window.getComputedStyle(node.parentElement);
+                        if (style.display === 'none' || style.visibility === 'hidden') {
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                    }
+                    return NodeFilter.FILTER_ACCEPT;
+                }
+            }
+        );
+
+        let currentNode;
+        let textNodeCount = 0;
+        while ((currentNode = walker.nextNode()) && textNodeCount < 2000) {
+            textNodeCount++;
+            if (currentNode.parentElement) {
+                candidateSet.add(currentNode.parentElement);
+            }
+        }
+        console.log(`[Aeyes Content] TreeWalker checked ${textNodeCount} text nodes. Total candidates: ${candidateSet.size}`);
+
+        const allElements = Array.from(candidateSet);
+
+        // Viewport Calculations
+        const viewportHeight = window.innerHeight;
+        const viewportWidth = window.innerWidth;
+        const centerX = viewportWidth / 2;
+        const centerY = viewportHeight / 2;
+
+        interface ScoredElement {
+            el: HTMLElement;
+            score: number;
+        }
+
+        const scoredElements: ScoredElement[] = [];
+        let itemsChecked = 0;
+        let skippedOffScreen = 0;
+        let skippedInvisible = 0;
+
+        console.log('[Aeyes Content] Starting Scoring Loop...');
+
+        for (const el of allElements) {
+            itemsChecked++;
+            if (itemsChecked > 2000) break; // Hard stop
+
+            const rect = el.getBoundingClientRect();
+
+            // 1. FAST REJECTION
+            if (rect.top > viewportHeight * 3 || rect.bottom < -viewportHeight * 3) {
+                skippedOffScreen++;
+                continue;
+            }
+
+            // 2. VISIBILITY CHECK (Expensive)
+            if (!isVisible(el)) {
+                skippedInvisible++;
+                continue;
+            }
+
+            // Calculate distance from center of viewport
+            const elCenterX = rect.left + rect.width / 2;
+            const elCenterY = rect.top + rect.height / 2;
+            const dist = Math.sqrt(Math.pow(elCenterX - centerX, 2) + Math.pow(elCenterY - centerY, 2));
+
+            let score = dist;
+
+            // Penalty for being off-screen
+            const isInViewport = (
+                rect.top >= -100 &&
+                rect.left >= -100 &&
+                rect.bottom <= (viewportHeight + 100) &&
+                rect.right <= (viewportWidth + 100)
+            );
+
+            if (!isInViewport) score += 10000;
+            else score -= 500;
+
+            // Penalty for massive wrappers
+            if (rect.height > viewportHeight && rect.width > viewportWidth) {
+                score += 5000;
+            }
+
+            scoredElements.push({ el, score });
+        }
+
+        console.log(`[Aeyes Content] Scoring done. Scored: ${scoredElements.length}. Skipped Off: ${skippedOffScreen}, Invis: ${skippedInvisible}`);
+
+        // Sort by priority
+        scoredElements.sort((a, b) => a.score - b.score);
+
+        const extracted: ExtractedElement[] = [];
+        const seenIds = new Set<string>();
+
+        // STRICT LIMIT 100
+        for (const item of scoredElements) {
+            if (extracted.length >= 100) break;
+
+            const el = item.el;
+            const id = getAeyesId(el);
+            if (seenIds.has(id)) continue;
+
+            const textRaw = el.innerText?.trim();
+            let displayText = textRaw;
+            let wasTruncated = false;
+
+            // Smart Truncation
+            if (textRaw && textRaw.length > 150) {
+                const sentences = textRaw.match(/[^\.!\?]+[\.!\?]+/g);
+                if (sentences && sentences.length >= 2) {
+                    displayText = sentences.slice(0, 2).join(' ');
+                } else {
+                    displayText = textRaw.substring(0, 150);
+                }
+                if (displayText.length > 180) displayText = displayText.substring(0, 180);
+
+                displayText += ' ...[truncated]';
+                wasTruncated = true;
+            }
+
+            seenIds.add(id);
+
+            const baseElement: any = {
+                id: id,
+                tagName: el.tagName.toLowerCase(),
+                role: el.getAttribute('role') || undefined,
+                text: displayText ? displayText.substring(0, 200) : undefined,
+                truncated: wasTruncated,
+                label: getAssociatedLabel(el)?.substring(0, 100),
+                placeholder: String((el as any).placeholder || '').substring(0, 100) || undefined,
+                alt: String((el as any).alt || '').substring(0, 100) || undefined,
+                value: String((el as any).value || '').substring(0, 100) || undefined,
+                checked: (el as any).checked,
+            };
+
+            // Remove empty strings resulting from String(undefined) -> "undefined" ?? No, || '' handles it.
+            // String(undefined || '') -> ''
+            // String(null || '') -> ''
+            // String(123 || '') -> '123'
+            // Wait, String('') is empty string.
+            // If empty string, we want undefined to save space?
+            // Let's refine:
+            const val = (el as any).value;
+            baseElement.value = (val !== null && val !== undefined && val !== '') ? String(val).substring(0, 100) : undefined;
+
+            const ph = (el as any).placeholder;
+            baseElement.placeholder = (ph !== null && ph !== undefined && ph !== '') ? String(ph).substring(0, 100) : undefined;
+
+            const alt = (el as any).alt;
+            baseElement.alt = (alt !== null && alt !== undefined && alt !== '') ? String(alt).substring(0, 100) : undefined;
+
+            if (el instanceof HTMLInputElement) {
+                extracted.push({ ...baseElement, type: el.type });
+            } else {
+                extracted.push(baseElement);
+            }
+        }
+
+        console.log(`[Aeyes Content] Extraction COMPLETE in ${(performance.now() - startTime).toFixed(2)}ms. Returning ${extracted.length} elements.`);
+
+        return {
+            url: window.location.href,
+            title: document.title,
+            elements: extracted,
+            message: 'DOM extraction (TreeWalker + Debug) completed',
+        };
+    } catch (e) {
+        console.error('[Aeyes Content] CRITICAL EXTRACTION ERROR:', e);
+        return {
+            url: window.location.href,
+            title: document.title,
+            elements: [],
+            message: `DOM extraction failed: ${e}`
+        };
     }
 }
 
-// Type action - focus input and set value with proper events
-function actionType(elementId: string, text: string): ActionResult {
-    const element = findElementById(elementId);
-    if (!element) {
-        return { success: false, message: `Element not found: ${elementId}` };
+// --- Actions ---
+
+// Fallback Search Helper
+function findElementByText(text: string): HTMLElement | null {
+    if (!text) return null;
+    const xpath = `//*[text()='${text}' or @aria-label='${text}' or @placeholder='${text}' or contains(text(), '${text}')]`;
+    try {
+        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+        return result.singleNodeValue as HTMLElement;
+    } catch (e) { return null; }
+}
+
+function actionClick(elementId: string, description?: string): ActionResult {
+    let element = findElementById(elementId);
+
+    // Self-Healing: If ID not found but description exists, try to find by text
+    if (!element && description) {
+        console.warn(`[Aeyes] Element ${elementId} not found. Attempting self-healing with description: "${description}"`);
+        element = findElementByText(description);
+        if (element) {
+            console.log(`[Aeyes] Self-healing successful! Found element by description.`);
+        }
     }
 
-    // Check if it's an input-like element
-    if (!(element instanceof HTMLInputElement ||
-        element instanceof HTMLTextAreaElement ||
-        element.isContentEditable)) {
-        return { success: false, message: `Element is not a text input: ${elementId}` };
-    }
+    if (!element) return { success: false, message: `Element not found: ${elementId} (and fallback "${description}" failed)` };
 
     try {
-        // Focus the element
         element.focus();
+        element.click();
+        return { success: true, message: `Clicked element: ${elementId}` };
+    } catch (e) { return { success: false, message: `Click failed: ${e}` }; }
+}
 
+
+function actionType(elementId: string, text: string): ActionResult {
+    const element = findElementById(elementId);
+    if (!element) return { success: false, message: `Element not found: ${elementId}` };
+    try {
+        element.focus();
         if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
-            // Set value
             element.value = text;
-
-            // Dispatch events to trigger any listeners
             element.dispatchEvent(new Event('input', { bubbles: true }));
             element.dispatchEvent(new Event('change', { bubbles: true }));
         } else if (element.isContentEditable) {
-            // For contenteditable elements
             element.innerText = text;
             element.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
         }
-
-        return { success: true, message: `Typed "${text}" into element: ${elementId}` };
-    } catch (error) {
-        return { success: false, message: `Type failed: ${error}` };
-    }
+        return { success: true, message: `Typed "${text}" into ${elementId}` };
+    } catch (e) { return { success: false, message: `Type failed: ${e}` }; }
 }
 
-// Scroll action - scroll page or to specific element
 function actionScroll(value: string): ActionResult {
     try {
-        const scrollAmount = window.innerHeight * 0.8; // 80% of viewport
-
-        if (value === 'up') {
-            window.scrollBy({ top: -scrollAmount, behavior: 'smooth' });
-            return { success: true, message: 'Scrolled up' };
-        } else if (value === 'down') {
-            window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
-            return { success: true, message: 'Scrolled down' };
-        } else if (value === 'top') {
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-            return { success: true, message: 'Scrolled to top' };
-        } else if (value === 'bottom') {
-            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-            return { success: true, message: 'Scrolled to bottom' };
-        } else {
-            // Assume it's an element ID - scroll to element
+        const scrollAmount = window.innerHeight * 0.8;
+        if (value === 'up') window.scrollBy({ top: -scrollAmount, behavior: 'smooth' });
+        else if (value === 'down') window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
+        else if (value === 'top') window.scrollTo({ top: 0, behavior: 'smooth' });
+        else if (value === 'bottom') window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        else {
             const element = findElementById(value);
             if (element) {
                 element.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -267,88 +387,89 @@ function actionScroll(value: string): ActionResult {
             }
             return { success: false, message: `Unknown scroll target: ${value}` };
         }
-    } catch (error) {
-        return { success: false, message: `Scroll failed: ${error}` };
-    }
+        return { success: true, message: `Scrolled ${value}` };
+    } catch (e) { return { success: false, message: `Scroll failed: ${e}` }; }
 }
 
-// Navigate action - go to URL
 function actionNavigate(url: string): ActionResult {
-    try {
-        // Validate URL
-        if (!url.startsWith('http://') && !url.startsWith('https://')) {
-            url = 'https://' + url;
-        }
-
-        // Navigate using location.href
-        window.location.href = url;
-
-        return { success: true, message: `Navigating to: ${url}` };
-    } catch (error) {
-        return { success: false, message: `Navigate failed: ${error}` };
-    }
+    if (!url.startsWith('http')) url = 'https://' + url;
+    window.location.href = url;
+    return { success: true, message: `Navigating to ${url}` };
 }
 
-// Focus action - set focus on element for accessibility
 function actionFocus(elementId: string): ActionResult {
     const element = findElementById(elementId);
-    if (!element) {
-        return { success: false, message: `Element not found: ${elementId}` };
-    }
-
-    try {
-        // Focus the element
-        element.focus();
-
-        // Optionally scroll into view
-        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-        return { success: true, message: `Focused element: ${elementId}` };
-    } catch (error) {
-        return { success: false, message: `Focus failed: ${error}` };
-    }
+    if (!element) return { success: false, message: `Element not found: ${elementId}` };
+    element.focus();
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return { success: true, message: `Focused ${elementId}` };
 }
 
-// Main action dispatcher
-function executeAction(action: Action): ActionResult {
+// Search Action
+async function actionSearch(query: string): Promise<ActionResult> {
+    if (!query) return { success: false, message: 'Search query empty' };
+
+    // 1. Try window.find (simple text search)
+    if ((window as any).find && (window as any).find(query)) {
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0);
+            const parent = range.commonAncestorContainer.parentElement;
+            if (parent) {
+                const id = getAeyesId(parent);
+                parent.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                return {
+                    success: true,
+                    message: `Found text "${query}" and scrolled to it. Element ID: ${id}`
+                };
+            }
+        }
+    }
+
+    // 2. Fallback: XPath search
+    try {
+        const xpath = `//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '${query.toLowerCase()}')]`;
+        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+        const node = result.singleNodeValue as HTMLElement;
+        if (node) {
+            const id = getAeyesId(node);
+            node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return {
+                success: true,
+                message: `Found text "${query}" (via XPath) and scrolled. Element ID: ${id}`
+            };
+        }
+    } catch (e) { console.warn('XPath search failed:', e); }
+
+    return { success: false, message: `Could not find text "${query}" on page.` };
+}
+
+// Read Action
+function actionRead(elementId: string): ActionResult {
+    const element = findElementById(elementId);
+    if (!element) return { success: false, message: `Element not found: ${elementId}` };
+    const fullText = element.innerText;
+    return {
+        success: true,
+        message: `Read element ${elementId}`,
+        data: { fullText: fullText }
+    };
+}
+
+async function executeAction(action: Action): Promise<ActionResult> {
     console.log('[Aeyes Content Script] Executing action:', action.description || action.type);
 
     switch (action.type) {
-        case 'click':
-            if (!action.elementId) {
-                return { success: false, message: 'Click action requires elementId' };
-            }
-            return actionClick(action.elementId);
-
-        case 'type':
-            if (!action.elementId || action.value === undefined) {
-                return { success: false, message: 'Type action requires elementId and value' };
-            }
-            return actionType(action.elementId, action.value);
-
-        case 'scroll':
-            if (!action.value) {
-                return { success: false, message: 'Scroll action requires value (up/down/top/bottom/elementId)' };
-            }
-            return actionScroll(action.value);
-
-        case 'navigate':
-            if (!action.value) {
-                return { success: false, message: 'Navigate action requires value (URL)' };
-            }
-            return actionNavigate(action.value);
-
-        case 'focus':
-            if (!action.elementId) {
-                return { success: false, message: 'Focus action requires elementId' };
-            }
-            return actionFocus(action.elementId);
-
-        default:
-            return { success: false, message: `Unknown action type: ${(action as any).type}` };
+        case 'click': return actionClick(action.elementId!, action.description);
+        case 'type': return actionType(action.elementId!, action.value!);
+        case 'scroll': return actionScroll(action.value!);
+        case 'navigate': return actionNavigate(action.value!);
+        case 'focus': return actionFocus(action.elementId!);
+        case 'search': return await actionSearch(action.value!);
+        case 'read': return actionRead(action.elementId!);
+        default: return { success: false, message: `Unknown action: ${(action as any).type}` };
     }
 }
 
-// Expose for testing in console
 (window as any).extractDOM = extractDOM;
 (window as any).executeAction = executeAction;

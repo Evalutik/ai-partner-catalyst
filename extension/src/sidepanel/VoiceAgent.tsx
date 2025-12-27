@@ -229,10 +229,19 @@ export default function VoiceAgent({
         // transcript is automatically reset by startListening(), so we can use it directly
         const fullCurrentText = (transcript + interimTranscript).trim();
 
-        // Echo Masking: Don't show text if it matches what we just said
-        if (lastSpokenTextRef.current && fullCurrentText.toLowerCase().includes(lastSpokenTextRef.current)) {
-            onStreamingTranscript?.(''); // Hide from UI
-            return;
+        // Echo Masking
+
+        // Content Check: If text matches last spoken, hide it.
+        const spoken = lastSpokenTextRef.current;
+        if (spoken && fullCurrentText) {
+            const cleanInput = fullCurrentText.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").trim();
+            const cleanSpoken = spoken.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").trim();
+
+            // Check if input is a substring of spoken (Echo)
+            if (cleanSpoken.includes(cleanInput)) {
+                onStreamingTranscript?.('');
+                return;
+            }
         }
 
         if (fullCurrentText) {
@@ -252,16 +261,19 @@ export default function VoiceAgent({
                 if (status === 'processing' || status === 'speaking' || processingRef.current || speakingRef.current) return;
 
                 const newText = transcript.trim();
-                if (newText) {
-                    // Echo Cancellation: simple check
-                    // If the recognized text is very similar to what was just spoken, ignore it (self-hearing)
-                    if (lastSpokenTextRef.current && newText.toLowerCase().includes(lastSpokenTextRef.current)) {
-                        console.log('[Aeyes] Ignored self-hearing:', newText);
-                        // Force clear the transcript so we don't process it later
+
+                // Final Echo Check before processing
+                if (spoken && newText) {
+                    const cleanInput = newText.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").trim();
+                    const cleanSpoken = spoken.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").trim();
+                    if (cleanSpoken.includes(cleanInput)) {
+                        console.log('[Aeyes] Ignored self-hearing (final):', newText);
                         startListening(); // Reset
                         return;
                     }
+                }
 
+                if (newText) {
                     // Audio cue: user finished speaking
                     await playDoneSound();
                     await processTranscript(newText);
@@ -313,20 +325,29 @@ export default function VoiceAgent({
     // Ref to track paused state in async functions
     const isPausedRef = useRef(isPaused);
     const stoppedManuallyRef = useRef(false); // Track manual stop to avoid race conditions
+    const listeningStartTimeRef = useRef<number>(0);
+
     useEffect(() => {
         isPausedRef.current = isPaused;
         if (!isPaused) stoppedManuallyRef.current = false;
     }, [isPaused]);
 
+    // Track when listening starts for grace period
+    useEffect(() => {
+        if (status === 'listening') {
+            listeningStartTimeRef.current = Date.now();
+        }
+    }, [status]);
+
     // Get DOM from current page via content script
-    const extractDOMFromPage = useCallback(async (): Promise<string | null> => {
+    const extractDOMFromPage = useCallback(async (): Promise<any | null> => {
         try {
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
             if (!tab?.id) return null;
 
             const response = await chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_DOM' });
             if (response?.success && response?.data) {
-                return JSON.stringify(response.data);
+                return response.data; // Return object directly
             }
             return null;
         } catch {
@@ -335,7 +356,7 @@ export default function VoiceAgent({
     }, []);
 
     // DOM extraction with stricter null handling
-    const extractDOMWithRetry = useCallback(async (): Promise<string | null> => {
+    const extractDOMWithRetry = useCallback(async (): Promise<any | null> => {
         let attempts = 0;
         while (attempts < 2) {
             const dom = await extractDOMFromPage();
@@ -355,14 +376,14 @@ export default function VoiceAgent({
         waitForPage?: boolean;
         needsDom?: boolean;
         description?: string;
-    }>): Promise<{ success: boolean; failedAction?: string; failReason?: string; lastDom?: string }> => {
+    }>): Promise<{ success: boolean; failedAction?: string; failReason?: string; lastDom?: any }> => {
         if (!actions || actions.length === 0) return { success: true };
 
         try {
             let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
             if (!tab?.id) return { success: false, failReason: 'No active tab' };
 
-            let lastDom: string | null = null;
+            let lastDom: any | null = null;
 
             for (let i = 0; i < actions.length; i++) {
                 const action = actions[i];
@@ -402,11 +423,11 @@ export default function VoiceAgent({
                     await new Promise(resolve => setTimeout(resolve, 1000));
 
                     // Get fresh DOM from the current page
-                    let domContext: string | null = null;
+                    let domContext: any | null = null;
                     try {
                         const response = await chrome.tabs.sendMessage(tab.id!, { type: 'EXTRACT_DOM' });
                         if (response?.success && response?.data) {
-                            domContext = JSON.stringify(response.data);
+                            domContext = response.data;
                             lastDom = domContext;
                         }
                     } catch (e) {
@@ -515,15 +536,17 @@ export default function VoiceAgent({
 
         updateStatus('processing');
 
-        const MAX_TOTAL_STEPS = 5; // Reduced to 5 to avoid long loops
+        const MAX_TOTAL_STEPS = 10; // Increased to 10 to handle complex tasks
         const MAX_CONSECUTIVE_FAILURES = 3;
 
         let stepCount = 0;
         let consecutiveFailures = 0;
         let currentTranscript = capitalizedText;
         let finalResponseText = '';
-        let loopDomContext: string | null = null; // Track DOM across loop
+        let loopDomContext: any | null = null; // Track DOM across loop
         let response: any = null; // Store response across iterations
+
+        let currentConversationId = conversationId; // Local copy for loop continuity
 
         try {
             while (stepCount < MAX_TOTAL_STEPS) {
@@ -547,18 +570,19 @@ export default function VoiceAgent({
                 response = await sendToBackend({
                     transcript: currentTranscript,
                     context: loopDomContext || undefined,
-                    conversation_id: conversationId || undefined
+                    conversation_id: currentConversationId || undefined
                 });
 
                 if (stoppedManuallyRef.current) break;
 
                 // Store conversation ID for continuity
-                if (response.conversation_id && !conversationId) {
-                    setConversationId(response.conversation_id);
+                if (response.conversation_id) {
+                    currentConversationId = response.conversation_id; // Update local loop var
+                    if (!conversationId) setConversationId(response.conversation_id); // Sync React state if needed
                 }
 
                 // 3. Execute actions if any
-                let actionResult = { success: true } as { success: boolean; failedAction?: string; failReason?: string; lastDom?: string };
+                let actionResult = { success: true } as { success: boolean; failedAction?: string; failReason?: string; lastDom?: any };
                 if (response.actions && response.actions.length > 0) {
                     actionResult = await executeActions(response.actions);
                 }
@@ -654,7 +678,8 @@ export default function VoiceAgent({
             // CRITICAL: Check stoppedManuallyRef instead of just isPausedRef
             if (!stoppedManuallyRef.current && !isPausedRef.current) {
                 // Wait delay to ensure audio is fully done and avoid self-hearing
-                await new Promise(resolve => setTimeout(resolve, 500));
+                // Increased to 1000ms to allow physical Room Echo to dissipate naturally
+                await new Promise(resolve => setTimeout(resolve, 1000));
 
                 if (!stoppedManuallyRef.current && !isPausedRef.current) {
                     await playDoneSound();
