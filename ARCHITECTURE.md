@@ -345,19 +345,20 @@ The content script needs to "see" the page. We extract all interactive elements 
 
 ---
 
-**Step 2.2: Gemini integration**
+**Step 2.2: Gemini integration (via Vertex AI)**
 
-This is where the intelligence lives. We connect to Gemini 2.0 Flash and craft prompts that let it understand user intent, match to page elements, and plan action sequences.
+This is where the intelligence lives. We connect to Vertex AI with a service account and use Gemini 2.0 Flash to understand user intent, match to page elements, and plan action sequences.
 
 | What | Details |
 |------|---------|
 | **Files** | [`backend/main.py`](backend/main.py) |
 | **Language** | Python |
-| **API** | [Gemini API](https://ai.google.dev/gemini-api/docs) or [Vertex AI](https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/gemini) |
-| **Package** | `google-generativeai` or `google-cloud-aiplatform` |
+| **API** | [Vertex AI Generative AI](https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/gemini) |
+| **Package** | `google-cloud-aiplatform` |
+| **Auth** | Service account JSON file (add to `.gitignore`!) |
 
 **Tasks:**
-- Set up Gemini client with API key
+- Set up Vertex AI client with service account credentials
 - Write intent parsing prompt: "search for weather" → `{action: "search", query: "weather"}`
 - Write element matching prompt: intent + DOM → element ID to click/type
 - Write action planning prompt: complex goal → sequence of actions

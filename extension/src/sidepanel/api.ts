@@ -10,7 +10,7 @@ export interface ConversationResponse {
     audioUrl?: string;
     actions?: Array<{
         type: 'click' | 'type' | 'scroll' | 'navigate';
-        target?: string;
+        elementId?: string;
         value?: string;
     }>;
 }

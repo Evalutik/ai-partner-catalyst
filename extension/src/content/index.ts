@@ -123,10 +123,13 @@ function getAssociatedLabel(el: HTMLElement): string | undefined {
 // Main function to extract interactive elements from the DOM
 function extractDOM(): DOMSnapshot {
     const interactiveSelectors = [
+        // Interactive elements
         'a', 'button', 'input', 'select', 'textarea',
         '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="menuitem"]',
         '[role="tab"]', '[role="radio"]', '[role="switch"]', '[role="treeitem"]',
-        '[onclick]', '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])'
+        '[onclick]', '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])',
+        // Headings for navigation (Wikipedia sections, etc.)
+        'h1', 'h2', 'h3', 'h4', 'h5', 'h6'
     ].join(',');
 
     const elements = Array.from(document.querySelectorAll(interactiveSelectors)) as HTMLElement[];

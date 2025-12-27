@@ -37,3 +37,4 @@ venv/
 *-service-account*.json
 *-credentials*.json
 service-account-key.json
+project-*.json

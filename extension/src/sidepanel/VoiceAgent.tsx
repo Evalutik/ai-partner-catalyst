@@ -318,6 +318,12 @@ export default function VoiceAgent({
                 context: domContext || undefined
             });
 
+            // Execute actions IMMEDIATELY (before audio plays)
+            // This ensures navigation/clicks happen right away
+            if (response.actions && response.actions.length > 0) {
+                await executeActions(response.actions);
+            }
+
             updateStatus('speaking');
             const audioUrl = await getAudioUrl(response.response);
 
@@ -333,11 +339,6 @@ export default function VoiceAgent({
             });
 
             audioElementRef.current = null;
-
-            // Execute any actions from Gemini
-            if (response.actions && response.actions.length > 0) {
-                await executeActions(response.actions);
-            }
 
             updateStatus('listening');
         } catch (err) {
