@@ -1,8 +1,17 @@
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 
+interface PageContext {
+    url: string;
+    title: string;
+    width: number;
+    height: number;
+    tabId?: number;
+}
+
 export interface ConversationRequest {
     transcript: string;
-    context?: string;
+    context?: string; // Full DOM
+    page_context?: PageContext; // Lightweight context
     conversation_id?: string;
 }
 
@@ -10,9 +19,11 @@ export interface Action {
     type: 'click' | 'type' | 'scroll' | 'navigate' | 'focus';
     elementId?: string;
     value?: string;
-    waitForPage?: boolean;  // Wait for page navigation/load
-    needsDom?: boolean;     // Need fresh DOM snapshot before executing
-    description?: string;   // What this action does (for logging)
+    waitForPage?: boolean;
+    needsDom?: boolean;
+    description?: string;
+    // Tab Management
+    tabId?: number; // Target tab for tab actions
 }
 
 export interface ConversationResponse {

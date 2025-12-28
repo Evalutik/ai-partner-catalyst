@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import os
-import json
+import json as json_lib
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -26,7 +26,7 @@ LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 PROJECT_ID = None
 try:
     with open(GOOGLE_CREDENTIALS_PATH, 'r') as f:
-        sa_data = json.load(f)
+        sa_data = json_lib.load(f)
         PROJECT_ID = sa_data.get('project_id')
         print(f"[Aeyes] Loaded project ID from service account: {PROJECT_ID}")
 except Exception as e:
@@ -49,92 +49,81 @@ except Exception as e:
     gemini_model = None
 
 # System prompt for Aeyes agent
-SYSTEM_PROMPT = """You are Aeyes, a helpful voice assistant for visually impaired users.
+# System prompt for Aeyes agent
+SYSTEM_PROMPT = """You are Aeyes, a smart voice assistant for visually impaired users.
 
-CRITICAL: You MUST respond with ONLY valid JSON. No extra text, no markdown, no explanations.
+CRITICAL PROTOCOL:
+1. RESPONSE FORMAT: You MUST return ONLY valid JSON.
+2. SINGLE MUTATIVE ACTION: You may output AT MOST ONE action that changes state (click, type, navigate, open_tab, etc.) per turn.
+   - AFTER a mutative action, you MUST stop and wait for the result.
+   - Do NOT chain multiple clicks or navigations.
+   - EXCEPTION: You may chain `wait` or perception tools (scan_page, get_page_status) if needed, but usually 1 action is best.
+3. ZOOM-IN STRATEGY (Minimizing Guesses):
+   - When landing on a NEW PAGE (or when context.url changes):
+     - DO NOT immediately guess selectors like `#search` or `.btn`.
+     - FIRST, use `scan_page` to understand the structure.
+     - THEN, use `fetch_dom` with a specific `selector` based on what you saw.
+   - If an element is missing, use `fetch_dom` with a broader selector rather than guessing blindly.
 
-When user asks you to do something, break it into steps and return JSON with this EXACT format:
+TOOLS (Perception):
+- `scan_page(max_depth: int = 2)`: Returns high-level structure (headers, sections, nav). Use on new pages.
+- `get_page_status()`: Returns URL, title, scroll position, loading state. fast.
+- `fetch_dom(selector: str = "", limit: int = 50, optimize: bool = True)`: Returns interactive elements.
+  - Use `selector` to focus (e.g. "header", "#search-results"). PREFER THIS over full page extraction.
 
+TOOLS (Actions - "The Hands"):
+- `click(elementId: str)`: Clicks an element. Returns {success, navigationOccurred}.
+- `type(elementId: str, value: str, submit: bool = True)`: Types text.
+- `scroll(direction: str, target: str = None)`: direction="up"|"down"|"top"|"bottom". target=elementId.
+- `navigate(url: str)`: Goes to a URL in CURRENT tab.
+- `go_back()`: Browser back.
+- `reload()`: Reload page.
+
+TOOLS (Tabs):
+- `open_tab(url: str)`: Opens NEW tab and focuses it.
+- `close_tab(tabId: int = None)`: Closes tab (default current).
+- `switch_tab(tabId: int)`: Switches focus.
+
+TOOLS (Communication):
+- `say(text: str)`: Speak to user.
+- `ask(text: str)`: Speak and wait for reply.
+- `notify_plan(plan: str)`: Updates the "Plan" display in the Side Panel (Visual only).
+- `wait(duration: int)`: Pause in ms.
+
+JSON OUTPUT FORMAT:
 {
-  "response": "Short friendly message about what you're doing, and offer to help more",
-  "actions": [list of actions],
-  "requiresFollowUp": false
+  "response": "Brief spoken response to user (optional if acting)",
+  "actions": [
+    { "type": "tool_name", "args": { ...arguments... } }
+  ],
+  "requiresFollowUp": boolean // Set TRUE if you need to see the result of this action to continue.
 }
 
-ACTION TYPES:
-1. navigate - Go to URL: {"type": "navigate", "value": "https://url.com", "waitForPage": true, "newTab": true}
-   - Use "newTab": true (default) when user says "open", "open in new tab", etc.
-   - Use "newTab": false when user says "go to", "navigate to" in current tab
-2. type - Type text: {"type": "type", "elementId": "el-123", "value": "text to type"}
-   - Fallback (only if ID unknown): {"type": "type", "description": "search box", "value": "text", "needsDom": true}
-3. click - Click element: {"type": "click", "elementId": "el-123", "description": "Submit Button"}
-   - ALWAYS include `description` (text/label) as a backup in case the ID changes.
-4. scroll - Scroll page: {"type": "scroll", "value": "down"}
-5. search - Find text on page: {"type": "search", "value": "Exact text to find"}
-   - Use this when you can't see the element you need in the current view.
-6. read - Read full text: {"type": "read", "elementId": "el-123"}
-
-NOTE: ALWAYS PREFER "elementId" if the element is in the `elements` list.
-Only use "description" + "needsDom: true" if the element is NOT in the list.
-
-EXAMPLES:
-
-User: "Find the price of the Sony camera"
-YOU MUST RETURN:
+EXAMPLE (Search for cats):
+User: "Search for cats"
 {
-  "response": "Searching for the price...",
+  "response": "Searching for cats...",
   "actions": [
-    {"type": "search", "value": "Price"}
+    { "type": "type", "args": { "elementId": "el-12", "value": "cats", "submit": true } }
   ],
   "requiresFollowUp": true
 }
 
-User: "Read the first paragraph"
-(Assuming el-10 text is truncated)
-YOU MUST RETURN:
+EXAMPLE (New Page Landed):
+(Context shows new URL)
 {
-  "response": "Reading the full paragraph for you...",
+  "response": "I'm looking at the page structure.",
   "actions": [
-    {"type": "read", "elementId": "el-10"}
+    { "type": "scan_page", "args": { "max_depth": 2 } }
   ],
-  "requiresFollowUp": false
+  "requiresFollowUp": true
 }
-
-User: "Go to YouTube and search for cats"
-YOU MUST RETURN:
-{
-  "response": "I'll take you to YouTube and search for cats. Let me know if you need anything else!",
-  "actions": [
-    {"type": "navigate", "value": "https://youtube.com", "waitForPage": true, "newTab": false},
-    {"type": "type", "description": "search input box", "value": "cats", "needsDom": true},
-    {"type": "click", "description": "search button", "needsDom": true}
-  ],
-  "requiresFollowUp": false
-}
-
-SPECIAL MESSAGES:
-
-1. [ACTION_FAILED] - An action failed. Analyze the error and DOM context to suggest recovery:
-   - If element not visible: suggest {"type": "scroll", "value": "down"} to reveal it
-   - If login required: respond asking user to log in first
-   - If element doesn't exist: try alternative description or ask user
-   
-2. [Continue] - Previous actions completed. Analyze the new page DOM and complete the task.
 
 REMEMBER:
-- ALWAYS include "actions" field (empty array [] if no actions needed)
-- For multi-step requests (like "go to X and do Y"), include ALL actions in ONE response
-- The "response" is spoken AFTER all actions complete - describe what you did briefly
-- Set waitForPage: true for navigate actions
-- Set needsDom: true for actions that need DOM elements from the new page
-- When recovering from [ACTION_FAILED], suggest ONE recovery action at a time
-- If you need to analyze page content, set requiresFollowUp: true
-- CRITICAL: Before finishing, verify you fulfilled the user's ENTIRE request. 
-  * Example: if user said "open video", merely searching is NOT enough. You must click the video.
-  * If the goal is not fully reached, return requiresFollowUp: true to continue.
-- ANTI-LOOP RULE: Do not respond with "I am analyzing" or "I am reading the page" unless you are also issuing an action (like scroll/search). If you have the data, ANSWER THE USER.
-- SEMANTIC INTERPRETATION: If user asks for "recommendations" and you are on a shopping site but not logged in, interpret this as "featured products" or "categories" visible on the page. Do not refuse just because of login status.
-- Response with JSON ONLY - nothing else!"""
+- If you need to find something, use `scan_page` -> `fetch_dom`.
+- NO BLIND GUESSING.
+- MAX 1 STATE CHANGE PER TURN.
+"""
 
 app = FastAPI(title="Aeyes Backend")
 
@@ -147,38 +136,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory conversation history (in production, use Redis or database)
-# Format: {conversation_id: [{"role": "user"|"assistant", "content": str, "timestamp": float}]}
+# In-memory conversation history
 conversation_history = {}
 
+class PageContext(BaseModel):
+    url: str
+    title: str
+    width: int
+    height: int
+    tabId: int | None = None
 
 class ConversationRequest(BaseModel):
     transcript: str
-    context: dict | None = None  # DOM snapshot as JSON object (not string)
-    conversation_id: str | None = None  # For maintaining conversation history
+    context: dict | None = None  # DOM snapshot (legacy/full)
+    page_context: PageContext | None = None  # Lightweight context
+    conversation_id: str | None = None
 
+class Action(BaseModel):
+    type: str
+    args: dict = {}
 
 class ConversationResponse(BaseModel):
     response: str
-    actions: list | None = None
+    actions: list[Action] | None = None
     requiresFollowUp: bool = False
     conversation_id: str | None = None
 
-
 class SpeakRequest(BaseModel):
     text: str
-
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "gemini": gemini_model is not None}
 
-
 @app.post("/conversation", response_model=ConversationResponse)
 async def conversation(request: ConversationRequest):
     """
     Process user transcript with Gemini, return response + actions.
-    Supports multi-step workflows and conversation history.
     """
     import uuid
     import time
@@ -214,188 +208,105 @@ async def conversation(request: ConversationRequest):
     try:
         # Build the prompt with context and history
         history_text = ""
-        if len(history) > 1:  # If there's previous conversation
-            recent_history = history[-6:]  # Last 3 exchanges (6 messages)
+        if len(history) > 1:
+            recent_history = history[-6:]
             history_text = "\n\nRecent conversation:\n"
-            for msg in recent_history[:-1]:  # Exclude current message
+            for msg in recent_history[:-1]:
                 role = "User" if msg["role"] == "user" else "Aeyes"
                 history_text += f"{role}: {msg['content']}\n"
 
+        # Context construction
+        context_str = ""
+        if request.page_context:
+            context_str += f"\nPAGE CONTEXT:\nURL: {request.page_context.url}\nTitle: {request.page_context.title}\nSize: {request.page_context.width}x{request.page_context.height}\nTabID: {request.page_context.tabId}\n"
+        
         if request.context:
-            # Format dict context to pretty JSON string for the prompt
-            context_str = json.dumps(request.context, indent=2)
-            
-            # Check for continuation and retrieve original goal
-            additional_context = ""
-            if user_text.startswith("[Continue"):
-                # Find the last user message that WASN'T a continue instruction
-                original_goal = "Analyze the page" # Default
-                for msg in reversed(history[:-1]): # Skip current
-                    if msg["role"] == "user" and not msg["content"].startswith("[Continue"):
-                        original_goal = msg["content"]
-                        break
-                additional_context = f"\nPENDING GOAL: \"{original_goal}\"\n(The user is waiting for this goal to be completed. Do not ask for new instructions - EXECUTE IT.)"
+            # If full DOM is provided (e.g. from fetch_dom result)
+            context_str += f"\nDOM ELEMENTS/DATA:\n{json_lib.dumps(request.context, indent=2)}\n"
 
-            prompt = f"""User request: "{user_text}"
-{additional_context}
+        prompt = f"""User request: "{user_text}"
 {history_text}
-Current page DOM (interactive elements):
 {context_str}
 
-Analyze the request and DOM, then respond with JSON.
-CRITICAL: If the user request is "[Continue...]", you MUST use the PENDING GOAL to determine your next action.
-- DOM ACTION PRIORITY: Scan `elements` list. If you find a matching element (e.g. video title containing "music"), YOU MUST USE ITS `elementId` (e.g. "el-302").
-- NO DESCRIPTION: Do NOT use "description" if you have the `elementId`. Using `elementId` is instant and reliable. Only use "description" if you are guessing.
-- FUZZY MATCHING: If the user asks for "any [X]", click ANY valid link that contains [X] in its text or label.
-- NO BLIND SCROLLING: Do not scroll if a viable candidate is ALREADY in the `elements` list.
-- If you see the information needed to answer the user, provide the ANSWER in the "response" field and set requiresFollowUp: false.
-- If you need to find text that isn't visible, return a "search" action.
-- DO NOT just say "I am analyzing". TAKE ACTION or ANSWER."""
-        else:
-            prompt = f"""User request: "{user_text}"
-{history_text}
-No DOM context provided - the user may be on the side panel or asking a general question.
-
-Respond with JSON."""
+Analyze the request and context. Respond with JSON based on the System Protocol."""
 
         # Build full prompt with system instructions
         full_prompt = SYSTEM_PROMPT + "\n\n" + prompt
         
-        # Call Vertex AI with retry logic for rate limits
+        # Call Vertex AI
         import time
-        from vertexai.generative_models import GenerationConfig
+        from vertexai.generative_models import GenerationConfig, SafetySetting, HarmCategory
         
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = gemini_model.generate_content(
-                    full_prompt,
-                    generation_config=GenerationConfig(
-                        temperature=0.3,  # Lower temperature for more consistent JSON
-                        max_output_tokens=2048,  # Allow complete responses
-                    )
-                )
-                break  # Success, exit retry loop
-            except Exception as retry_error:
-                if "quota" in str(retry_error).lower() or "rate" in str(retry_error).lower():
-                    wait_time = (attempt + 1) * 5  # 5s, 10s, 15s
-                    time.sleep(wait_time)
-                    if attempt == max_retries - 1:
-                        raise  # Re-raise on final attempt
-                else:
-                    raise  # Non-rate-limit error, re-raise immediately
+        safety_settings = [
+            SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                threshold=SafetySetting.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            ),
+            SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold=SafetySetting.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            ),
+            SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold=SafetySetting.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            ),
+            SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold=SafetySetting.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            ),
+        ]
+
+        response = gemini_model.generate_content(
+            full_prompt,
+            generation_config=GenerationConfig(
+                temperature=0.3, 
+                max_output_tokens=1024,
+                response_mime_type="application/json"
+            ),
+            safety_settings=safety_settings
+        )
         
-        # Parse the response
         response_text = response.text.strip()
+        print(f"\n[AEYES DEBUG] Gemini Response:\n{response_text}\n")
 
-        # Debug logging
-        print(f"\n{'='*60}")
-        print(f"[AEYES DEBUG] Raw Gemini Response:")
-        print(response_text)
-        print(f"{'='*60}\n")
-
-        # Try to extract JSON from the response
-        # Handle cases where Gemini might wrap in markdown code blocks or add extra text
-
-        # Remove markdown code blocks
-        if "```json" in response_text or "```" in response_text:
-            # Extract content between ``` markers
-            import re
-            match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', response_text, re.DOTALL)
-            if match:
-                response_text = match.group(1).strip()
-
-        # Handle case where Gemini adds thinking/explanation before JSON
-        # Look for the first { and last } to extract just the JSON object
-        first_brace = response_text.find('{')
-        last_brace = response_text.rfind('}')
-
-        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-            response_text = response_text[first_brace:last_brace + 1]
-
-        print(f"[AEYES DEBUG] Cleaned JSON:")
-        print(response_text)
-        print(f"{'='*60}\n")
-
+        # Parse JSON
         try:
-            parsed = json.loads(response_text)
+            parsed = json_lib.loads(response_text)
+        except json_lib.JSONDecodeError:
+            # Fallback cleanup
+            cleaned = response_text.replace("```json", "").replace("```", "").strip()
+            parsed = json_lib.loads(cleaned)
 
-            assistant_response = parsed.get("response", "I understood your request.")
-            actions = parsed.get("actions", None)
-            requires_follow_up = parsed.get("requiresFollowUp", False)
+        assistant_response = parsed.get("response", "I'm on it.")
+        raw_actions = parsed.get("actions", [])
+        requires_follow_up = parsed.get("requiresFollowUp", False)
 
-            # Add assistant response to history
-            history.append({
-                "role": "assistant",
-                "content": assistant_response,
-                "timestamp": time.time()
-            })
+        # Normalize actions to list of Action objects
+        valid_actions = []
+        if raw_actions:
+            for act in raw_actions:
+                if isinstance(act, dict) and "type" in act:
+                    valid_actions.append(Action(type=act["type"], args=act.get("args", {})))
 
-            # Update conversation history
-            conversation_history[conversation_id] = history
-
-            return ConversationResponse(
-                response=assistant_response,
-                actions=actions,
-                requiresFollowUp=requires_follow_up,
-                conversation_id=conversation_id
-            )
-        except json.JSONDecodeError as je:
-            # Try to extract just the response field using regex
-            import re
-            match = re.search(r'"response"\s*:\s*"([^"]*)"', response_text)
-            if match:
-                extracted_response = match.group(1)
-
-                # Add to history
-                history.append({
-                    "role": "assistant",
-                    "content": extracted_response,
-                    "timestamp": time.time()
-                })
-                conversation_history[conversation_id] = history
-
-                return ConversationResponse(
-                    response=extracted_response,
-                    actions=None,
-                    conversation_id=conversation_id
-                )
-
-            # Last resort: clean up any JSON-like artifacts from the text
-            clean_text = response_text
-            clean_text = re.sub(r'^\s*\{?\s*"response"\s*:\s*"?', '', clean_text)
-            clean_text = re.sub(r'"?\s*,?\s*"actions"\s*:\s*\[.*\]?\s*\}?\s*$', '', clean_text)
-            clean_text = clean_text.strip().strip('"')
-
-            fallback_response = clean_text[:200] if clean_text else "I had trouble understanding. Could you try again?"
-
-            # Add to history
-            history.append({
-                "role": "assistant",
-                "content": fallback_response,
-                "timestamp": time.time()
-            })
-            conversation_history[conversation_id] = history
-
-            return ConversationResponse(
-                response=fallback_response,
-                actions=None,
-                conversation_id=conversation_id
-            )
-
-    except Exception as e:
-        fallback_msg = "I had a problem processing that. Please try again."
-
-        # Add to history
+        # Add assistant response to history
         history.append({
             "role": "assistant",
-            "content": fallback_msg,
+            "content": assistant_response,
             "timestamp": time.time()
         })
         conversation_history[conversation_id] = history
 
         return ConversationResponse(
-            response=fallback_msg,
+            response=assistant_response,
+            actions=valid_actions,
+            requiresFollowUp=requires_follow_up,
+            conversation_id=conversation_id
+        )
+
+    except Exception as e:
+        print(f"[Backend Error] {e}")
+        return ConversationResponse(
+            response=f"I had a problem processing that. Error: {str(e)}",
             actions=None,
             conversation_id=conversation_id
         )
@@ -443,6 +354,7 @@ async def speak(request: SpeakRequest):
             detail="ElevenLabs package not installed. Run: pip install elevenlabs"
         )
     except Exception as e:
+        print(f"[Backend Error] Speak failed: {e}")
         error_msg = str(e)
         print(f"[Aeyes] TTS Error: {error_msg}")  # Added logging
         if "quota_exceeded" in error_msg.lower():
@@ -478,7 +390,7 @@ async def resolve_element(request: ResolveElementRequest):
     resolve_prompt = f"""You are a DOM element finder. Given a DOM snapshot, find the element that matches the description.
 
 DOM CONTEXT:
-{json.dumps(request.dom_context, indent=2)}
+{json_lib.dumps(request.dom_context, indent=2)}
 
 TASK: Find the element for: {request.action_description}
 Action type: {request.action_type}
@@ -514,7 +426,7 @@ Return JSON ONLY."""
         if first_brace != -1 and last_brace > first_brace:
             response_text = response_text[first_brace:last_brace + 1]
         
-        parsed = json.loads(response_text)
+        parsed = json_lib.loads(response_text)
         element_id = parsed.get("elementId")
         confidence = parsed.get("confidence", "low")
         

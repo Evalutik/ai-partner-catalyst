@@ -2,18 +2,29 @@
 
 // Message listener - responds to requests from popup/background
 chrome.runtime.onMessage.addListener(
-    (message: { type: string;[key: string]: unknown }, _sender, sendResponse) => {
+    (message: { type: string;[key: string]: any }, _sender, sendResponse) => {
         if (message.type === 'EXTRACT_DOM') {
-            const dom = extractDOM();
+            const dom = extractDOM(message.selector, message.limit);
             sendResponse({ success: true, data: dom });
+            return;
+        }
+
+        if (message.type === 'SCAN_PAGE') {
+            const data = scanPage(message.maxDepth);
+            sendResponse({ success: true, data });
+            return;
+        }
+
+        if (message.type === 'GET_PAGE_STATUS') {
+            const data = getPageStatus();
+            sendResponse({ success: true, data });
+            return;
         }
 
         if (message.type === 'EXECUTE_ACTION') {
             executeAction(message.action as Action).then(result => sendResponse(result));
-            return true; // async response
+            return true;
         }
-
-        return true;
     }
 );
 
@@ -113,154 +124,127 @@ function findElementById(elementId: string): HTMLElement | null {
 
 // --- DOM Extraction Logic ---
 
-function extractDOM(): DOMSnapshot {
-    console.log('[Aeyes Content] Starting DOM extraction...');
+interface PageStatus {
+    url: string;
+    title: string;
+    scrollX: number;
+    scrollY: number;
+    windowWidth: number;
+    windowHeight: number;
+    loading: boolean;
+}
+
+function getPageStatus(): PageStatus {
+    return {
+        url: window.location.href,
+        title: document.title,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+        windowWidth: window.innerWidth,
+        windowHeight: window.innerHeight,
+        loading: document.readyState !== 'complete'
+    };
+}
+
+interface PageStructure {
+    headers: string[];
+    landmarks: string[];
+    interactionPoints: number;
+}
+
+function scanPage(_maxDepth: number = 2): PageStructure {
+    // Quick structural scan
+    const headers = Array.from(document.querySelectorAll('h1, h2, h3')).map(h => {
+        return `${h.tagName}: ${(h as HTMLElement).innerText.substring(0, 50).replace(/\n/g, ' ')}`;
+    });
+
+    const landmarks = Array.from(document.querySelectorAll('main, nav, header, footer, [role="main"], [role="navigation"], [role="search"]')).map(l => {
+        const role = l.getAttribute('role') || l.tagName.toLowerCase();
+        const label = l.getAttribute('aria-label') || '';
+        return `${role}${label ? ` ("${label}")` : ''}`;
+    });
+
+    // Estimate density
+    const interactionPoints = document.querySelectorAll('a, button, input').length;
+
+    return {
+        headers,
+        landmarks,
+        interactionPoints,
+    };
+}
+
+function extractDOM(selector?: string, limit: number = 50): DOMSnapshot {
+    console.log(`[Aeyes Content] Extracting DOM. Selector: "${selector || 'ALL'}", Limit: ${limit}`);
     const startTime = performance.now();
     try {
-        // 1. FAST SELECTORS: Interactive elements + Headings
-        const interactiveSelectors = [
-            'a', 'button', 'input', 'select', 'textarea',
-            '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="menuitem"]',
-            '[role="tab"]', '[role="radio"]', '[role="switch"]', '[role="treeitem"]',
-            '[onclick]', '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])',
-            'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'
-        ].join(',');
+        let candidateSet = new Set<HTMLElement>();
 
-        const candidateSet = new Set<HTMLElement>();
+        if (selector) {
+            // ZOOM-IN MODE: Use specific selector
+            try {
+                const results = document.querySelectorAll(selector);
+                console.log(`[Aeyes Content] Zoom-in selector "${selector}" found ${results.length} items`);
+                results.forEach(el => candidateSet.add(el as HTMLElement));
 
-        const initial = document.querySelectorAll(interactiveSelectors);
-        console.log(`[Aeyes Content] Initial selectors found: ${initial.length}`);
-
-        initial.forEach(el => {
-            candidateSet.add(el as HTMLElement);
-        });
-
-        // 2. TREE WALKER: Efficiently find text nodes
-        console.log('[Aeyes Content] Starting TreeWalker...');
-        const walker = document.createTreeWalker(
-            document.body,
-            NodeFilter.SHOW_TEXT,
-            {
-                acceptNode: (node) => {
-                    if (!node.textContent || node.textContent.trim().length < 3) {
-                        return NodeFilter.FILTER_REJECT;
-                    }
-                    if (node.parentElement) {
-                        const style = window.getComputedStyle(node.parentElement);
-                        if (style.display === 'none' || style.visibility === 'hidden') {
-                            return NodeFilter.FILTER_REJECT;
-                        }
-                    }
-                    return NodeFilter.FILTER_ACCEPT;
-                }
-            }
-        );
-
-        let currentNode;
-        let textNodeCount = 0;
-        while ((currentNode = walker.nextNode()) && textNodeCount < 2000) {
-            textNodeCount++;
-            if (currentNode.parentElement) {
-                candidateSet.add(currentNode.parentElement);
+                // Also add children of selected elements if they are interactive
+                results.forEach(parent => {
+                    const children = parent.querySelectorAll('a, button, input, select, textarea');
+                    children.forEach(child => candidateSet.add(child as HTMLElement));
+                });
+            } catch (e) {
+                console.warn(`[Aeyes] Invalid selector: ${selector}, falling back to full scan`);
             }
         }
-        console.log(`[Aeyes Content] TreeWalker checked ${textNodeCount} text nodes. Total candidates: ${candidateSet.size}`);
 
-        const allElements = Array.from(candidateSet);
+        if (candidateSet.size === 0) {
+            // FULL SCAN MODE (Default)
+            const interactiveSelectors = [
+                'a', 'button', 'input', 'select', 'textarea',
+                '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="menuitem"]',
+                '[role="tab"]', '[role="radio"]', '[role="switch"]', '[role="treeitem"]',
+                '[onclick]', '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])',
+                'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'
+            ].join(',');
 
-        // Viewport Calculations
+            const initial = document.querySelectorAll(interactiveSelectors);
+            initial.forEach(el => candidateSet.add(el as HTMLElement));
+        }
+
+        // Viewport & Visibility Filter
         const viewportHeight = window.innerHeight;
         const viewportWidth = window.innerWidth;
-        const centerX = viewportWidth / 2;
-        const centerY = viewportHeight / 2;
-
-        interface ScoredElement {
-            el: HTMLElement;
-            score: number;
-        }
-
-        const scoredElements: ScoredElement[] = [];
-        let itemsChecked = 0;
-        let skippedOffScreen = 0;
-        let skippedInvisible = 0;
-
-        console.log('[Aeyes Content] Starting Scoring Loop...');
-
-        for (const el of allElements) {
-            itemsChecked++;
-            if (itemsChecked > 2000) break; // Hard stop
-
-            const rect = el.getBoundingClientRect();
-
-            // 1. FAST REJECTION
-            if (rect.top > viewportHeight * 3 || rect.bottom < -viewportHeight * 3) {
-                skippedOffScreen++;
-                continue;
-            }
-
-            // 2. VISIBILITY CHECK (Expensive)
-            if (!isVisible(el)) {
-                skippedInvisible++;
-                continue;
-            }
-
-            // Calculate distance from center of viewport
-            const elCenterX = rect.left + rect.width / 2;
-            const elCenterY = rect.top + rect.height / 2;
-            const dist = Math.sqrt(Math.pow(elCenterX - centerX, 2) + Math.pow(elCenterY - centerY, 2));
-
-            let score = dist;
-
-            // Penalty for being off-screen
-            const isInViewport = (
-                rect.top >= -100 &&
-                rect.left >= -100 &&
-                rect.bottom <= (viewportHeight + 100) &&
-                rect.right <= (viewportWidth + 100)
-            );
-
-            if (!isInViewport) score += 10000;
-            else score -= 500;
-
-            // Penalty for massive wrappers
-            if (rect.height > viewportHeight && rect.width > viewportWidth) {
-                score += 5000;
-            }
-
-            scoredElements.push({ el, score });
-        }
-
-        console.log(`[Aeyes Content] Scoring done. Scored: ${scoredElements.length}. Skipped Off: ${skippedOffScreen}, Invis: ${skippedInvisible}`);
-
-        // Sort by priority
-        scoredElements.sort((a, b) => a.score - b.score);
-
         const extracted: ExtractedElement[] = [];
         const seenIds = new Set<string>();
 
-        // STRICT LIMIT 100
-        for (const item of scoredElements) {
-            if (extracted.length >= 100) break;
+        // Optimized processing loop
+        for (const el of candidateSet) {
+            if (extracted.length >= limit) break;
 
-            const el = item.el;
+            const rect = el.getBoundingClientRect();
+
+            // Fast Rejection (Off-screen)
+            // Allow small buffer (500px)
+            if (rect.bottom < -500 || rect.top > viewportHeight + 500) continue;
+            if (rect.right < -500 || rect.left > viewportWidth + 500) continue;
+
+            // Visibility Check
+            if (!isVisible(el)) continue;
+
             const id = getAeyesId(el);
             if (seenIds.has(id)) continue;
 
             const textRaw = el.innerText?.trim();
+            // SKIP EMPTY NON-INPUTS
+            if (!textRaw && !(el instanceof HTMLInputElement) && !(el instanceof HTMLSelectElement) && !(el as HTMLElement).getAttribute('aria-label')) {
+                continue;
+            }
+
             let displayText = textRaw;
             let wasTruncated = false;
 
-            // Smart Truncation
             if (textRaw && textRaw.length > 150) {
-                const sentences = textRaw.match(/[^\.!\?]+[\.!\?]+/g);
-                if (sentences && sentences.length >= 2) {
-                    displayText = sentences.slice(0, 2).join(' ');
-                } else {
-                    displayText = textRaw.substring(0, 150);
-                }
-                if (displayText.length > 180) displayText = displayText.substring(0, 180);
-
-                displayText += ' ...[truncated]';
+                displayText = textRaw.substring(0, 150) + '...';
                 wasTruncated = true;
             }
 
@@ -270,54 +254,28 @@ function extractDOM(): DOMSnapshot {
                 id: id,
                 tagName: el.tagName.toLowerCase(),
                 role: el.getAttribute('role') || undefined,
-                text: displayText ? displayText.substring(0, 200) : undefined,
+                text: displayText,
                 truncated: wasTruncated,
-                label: getAssociatedLabel(el)?.substring(0, 100),
-                placeholder: String((el as any).placeholder || '').substring(0, 100) || undefined,
-                alt: String((el as any).alt || '').substring(0, 100) || undefined,
-                value: String((el as any).value || '').substring(0, 100) || undefined,
-                checked: (el as any).checked,
+                label: String(getAssociatedLabel(el) || '').substring(0, 100),
+                placeholder: String((el as any).placeholder || '').substring(0, 100),
+                value: String((el as any).value || '').substring(0, 100),
+                checked: (el as any).checked
             };
 
-            // Remove empty strings resulting from String(undefined) -> "undefined" ?? No, || '' handles it.
-            // String(undefined || '') -> ''
-            // String(null || '') -> ''
-            // String(123 || '') -> '123'
-            // Wait, String('') is empty string.
-            // If empty string, we want undefined to save space?
-            // Let's refine:
-            const val = (el as any).value;
-            baseElement.value = (val !== null && val !== undefined && val !== '') ? String(val).substring(0, 100) : undefined;
-
-            const ph = (el as any).placeholder;
-            baseElement.placeholder = (ph !== null && ph !== undefined && ph !== '') ? String(ph).substring(0, 100) : undefined;
-
-            const alt = (el as any).alt;
-            baseElement.alt = (alt !== null && alt !== undefined && alt !== '') ? String(alt).substring(0, 100) : undefined;
-
-            if (el instanceof HTMLInputElement) {
-                extracted.push({ ...baseElement, type: el.type });
-            } else {
-                extracted.push(baseElement);
-            }
+            extracted.push(baseElement);
         }
 
-        console.log(`[Aeyes Content] Extraction COMPLETE in ${(performance.now() - startTime).toFixed(2)}ms. Returning ${extracted.length} elements.`);
+        console.log(`[Aeyes Content] Extraction done in ${(performance.now() - startTime).toFixed(2)}ms. Found ${extracted.length} items.`);
 
         return {
             url: window.location.href,
             title: document.title,
             elements: extracted,
-            message: 'DOM extraction (TreeWalker + Debug) completed',
+            message: `Extracted ${extracted.length} elements`
         };
     } catch (e) {
-        console.error('[Aeyes Content] CRITICAL EXTRACTION ERROR:', e);
-        return {
-            url: window.location.href,
-            title: document.title,
-            elements: [],
-            message: `DOM extraction failed: ${e}`
-        };
+        console.error('[Aeyes Content] Extraction Failed:', e);
+        return { url: window.location.href, title: document.title, elements: [], message: String(e) };
     }
 }
 
@@ -333,25 +291,45 @@ function findElementByText(text: string): HTMLElement | null {
     } catch (e) { return null; }
 }
 
-function actionClick(elementId: string, description?: string): ActionResult {
-    let element = findElementById(elementId);
+function actionClick(elementId: string, description?: string): Promise<ActionResult> {
+    return new Promise((resolve) => {
+        let element = findElementById(elementId);
 
-    // Self-Healing: If ID not found but description exists, try to find by text
-    if (!element && description) {
-        console.warn(`[Aeyes] Element ${elementId} not found. Attempting self-healing with description: "${description}"`);
-        element = findElementByText(description);
-        if (element) {
-            console.log(`[Aeyes] Self-healing successful! Found element by description.`);
+        // Self-Healing
+        if (!element && description) {
+            console.warn(`[Aeyes] Element ${elementId} not found. Attempting self-healing with: "${description}"`);
+            element = findElementByText(description);
         }
-    }
 
-    if (!element) return { success: false, message: `Element not found: ${elementId} (and fallback "${description}" failed)` };
+        if (!element) {
+            resolve({ success: false, message: `Element not found: ${elementId} (and fallback "${description}" failed)` });
+            return;
+        }
 
-    try {
-        element.focus();
-        element.click();
-        return { success: true, message: `Clicked element: ${elementId}` };
-    } catch (e) { return { success: false, message: `Click failed: ${e}` }; }
+        try {
+            element.focus();
+
+            // Navigation Detection
+            let navigationOccurred = false;
+            const onBeforeUnload = () => { navigationOccurred = true; };
+            window.addEventListener('beforeunload', onBeforeUnload);
+
+            element.click();
+
+            // Wait briefly to see if unload happens
+            setTimeout(() => {
+                window.removeEventListener('beforeunload', onBeforeUnload);
+                resolve({
+                    success: true,
+                    message: `Clicked ${elementId}. Navigation: ${navigationOccurred}`,
+                    data: { navigationOccurred }
+                });
+            }, 100);
+
+        } catch (e) {
+            resolve({ success: false, message: `Click failed: ${e}` });
+        }
+    });
 }
 
 
@@ -364,36 +342,65 @@ function actionType(elementId: string, text: string): ActionResult {
             element.value = text;
             element.dispatchEvent(new Event('input', { bubbles: true }));
             element.dispatchEvent(new Event('change', { bubbles: true }));
+
+            // Verification
+            const verified = element.value === text;
+            return {
+                success: true,
+                message: `Typed "${text}". Verified: ${verified}`,
+                data: { verified, currentValue: element.value }
+            };
         } else if (element.isContentEditable) {
             element.innerText = text;
             element.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+            return { success: true, message: `Typed into contentEditable.` };
         }
-        return { success: true, message: `Typed "${text}" into ${elementId}` };
+        return { success: false, message: "Element is not input or contentEditable" };
     } catch (e) { return { success: false, message: `Type failed: ${e}` }; }
 }
 
-function actionScroll(value: string): ActionResult {
+function actionScroll(value: string | undefined): ActionResult {
     try {
         const scrollAmount = window.innerHeight * 0.8;
-        if (value === 'up') window.scrollBy({ top: -scrollAmount, behavior: 'smooth' });
-        else if (value === 'down') window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
-        else if (value === 'top') window.scrollTo({ top: 0, behavior: 'smooth' });
-        else if (value === 'bottom') window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        // Default to down if no value provided
+        const target = value || 'down';
+
+        if (target === 'up') {
+            window.scrollBy({ top: -scrollAmount, behavior: 'smooth' });
+        }
+        else if (target === 'down') {
+            window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
+        }
+        else if (target === 'top') {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        else if (target === 'bottom') {
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        }
         else {
-            const element = findElementById(value);
+            const element = findElementById(target);
             if (element) {
                 element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                return { success: true, message: `Scrolled to element: ${value}` };
+            } else {
+                return { success: false, message: `Unknown scroll target: ${target}` };
             }
-            return { success: false, message: `Unknown scroll target: ${value}` };
         }
-        return { success: true, message: `Scrolled ${value}` };
+
+        // Return new position
+        return {
+            success: true,
+            message: `Scrolled ${target}`,
+            data: { scrollX: window.scrollX, scrollY: window.scrollY }
+        };
     } catch (e) { return { success: false, message: `Scroll failed: ${e}` }; }
 }
 
 function actionNavigate(url: string): ActionResult {
     if (!url.startsWith('http')) url = 'https://' + url;
-    window.location.href = url;
+    // Delay navigation slightly to allow response to be sent back to background
+    setTimeout(() => {
+        window.location.href = url;
+    }, 100);
     return { success: true, message: `Navigating to ${url}` };
 }
 
@@ -462,7 +469,7 @@ async function executeAction(action: Action): Promise<ActionResult> {
     switch (action.type) {
         case 'click': return actionClick(action.elementId!, action.description);
         case 'type': return actionType(action.elementId!, action.value!);
-        case 'scroll': return actionScroll(action.value!);
+        case 'scroll': return actionScroll(action.value);
         case 'navigate': return actionNavigate(action.value!);
         case 'focus': return actionFocus(action.elementId!);
         case 'search': return await actionSearch(action.value!);
@@ -472,4 +479,6 @@ async function executeAction(action: Action): Promise<ActionResult> {
 }
 
 (window as any).extractDOM = extractDOM;
+(window as any).scanPage = scanPage;
+(window as any).getPageStatus = getPageStatus;
 (window as any).executeAction = executeAction;

@@ -15,6 +15,7 @@ interface VoiceAgentProps {
     status: Status;
     onPermissionRequired?: (required: boolean) => void;
     onStreamingTranscript?: (text: string) => void;
+    onPlan?: (text: string) => void;
 }
 
 export default function VoiceAgent({
@@ -25,7 +26,8 @@ export default function VoiceAgent({
     onAutoStartComplete,
     status,
     onPermissionRequired,
-    onStreamingTranscript
+    onStreamingTranscript,
+    onPlan
 }: VoiceAgentProps) {
     const [error, setError] = useState<string | null>(null);
     const [audioLevel, setAudioLevel] = useState<number[]>(new Array(16).fill(0));
@@ -36,6 +38,7 @@ export default function VoiceAgent({
     const [isPaused, setIsPaused] = useState(false); // Listening paused by user
 
     // Refs for audio and processing state
+    const statusRef = useRef(status);
     const hasGreetedRef = useRef(false);
     const audioElementRef = useRef<HTMLAudioElement | null>(null);
     const processingRef = useRef(false);
@@ -63,6 +66,10 @@ export default function VoiceAgent({
     }, [onStatusChange]);
 
 
+
+    useEffect(() => {
+        statusRef.current = status;
+    }, [status]);
 
     useEffect(() => {
         if (speechError) {
@@ -223,7 +230,7 @@ export default function VoiceAgent({
 
     useEffect(() => {
         // STRICT GUARD: Ignore any input if we are processing or speaking
-        if (status === 'processing' || status === 'speaking' || processingRef.current || speakingRef.current) return;
+        if (statusRef.current === 'processing' || statusRef.current === 'speaking' || processingRef.current || speakingRef.current) return;
 
         // Calculate current real-time text
         // transcript is automatically reset by startListening(), so we can use it directly
@@ -257,8 +264,8 @@ export default function VoiceAgent({
 
         if (transcript.trim()) {
             silenceTimeoutRef.current = window.setTimeout(async () => {
-                // Double check status before processing
-                if (status === 'processing' || status === 'speaking' || processingRef.current || speakingRef.current) return;
+                // Double check status before processing using Refs for live state
+                if (statusRef.current === 'processing' || statusRef.current === 'speaking' || processingRef.current || speakingRef.current) return;
 
                 const newText = transcript.trim();
 
@@ -350,7 +357,11 @@ export default function VoiceAgent({
                 return response.data; // Return object directly
             }
             return null;
-        } catch {
+            // patched catch block
+        } catch (e: any) {
+            if (e.message && (e.message.includes('message port closed') || e.message.includes('receiving end does not exist'))) {
+                return null;
+            }
             return null;
         }
     }, []);
@@ -367,6 +378,77 @@ export default function VoiceAgent({
         return null;
     }, [extractDOMFromPage]);
 
+    // Capture page context (lightweight)
+    const capturePageContext = useCallback(async (): Promise<any | null> => {
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab?.id) return null;
+
+            return {
+                url: tab.url || '',
+                title: tab.title || '',
+                width: tab.width || 0,
+                height: tab.height || 0,
+                tabId: tab.id
+            };
+        } catch (e) {
+            console.warn('[Aeyes] Failed to capture page context:', e);
+            return null;
+        }
+    }, []);
+
+    // Tab Management Actions
+    const handleTabAction = useCallback(async (action: any): Promise<{ success: boolean; message?: string }> => {
+        try {
+            console.log('[Aeyes] Handling Tab Action:', action.type, action);
+            if (action.type === 'open_tab' || (action.type === 'navigate' && action.newTab)) {
+                const url = action.value || 'about:blank';
+                await chrome.tabs.create({ url });
+                return { success: true, message: `Opened new tab: ${url}` };
+            }
+
+            if (action.type === 'close_tab') {
+                const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                if (tab?.id) {
+                    await chrome.tabs.remove(tab.id);
+                    return { success: true, message: 'Closed current tab' };
+                }
+            }
+
+            if (action.type === 'switch_tab') {
+                // Simple logic: switch to next tab or specific index if provided (not implemented deep yet)
+                // For now, let's just query and switch to the "next" numerical ID or index? 
+                // Better: "switch_tab" usually implies satisfying a user request like "previous tab".
+                // Let's implement basic next/prev or relative switching if value is 'next'/'previous'.
+                const tabs = await chrome.tabs.query({ currentWindow: true });
+                const currentTab = tabs.find(t => t.active);
+                if (!currentTab) return { success: false, message: 'No active tab' };
+
+                let targetIndex = currentTab.index;
+                if (action.value === 'next') targetIndex = (currentTab.index + 1) % tabs.length;
+                else if (action.value === 'previous') targetIndex = (currentTab.index - 1 + tabs.length) % tabs.length;
+                // If ID provided
+                else if (action.tabId) {
+                    const target = tabs.find(t => t.id === action.tabId);
+                    if (target) {
+                        await chrome.tabs.update(target.id!, { active: true });
+                        return { success: true, message: `Switched to tab ${target.title}` };
+                    }
+                }
+
+                const targetTab = tabs.find(t => t.index === targetIndex);
+                if (targetTab?.id) {
+                    await chrome.tabs.update(targetTab.id, { active: true });
+                    return { success: true, message: `Switched to tab ${targetTab.title}` };
+                }
+            }
+
+            return { success: false, message: `Unknown tab action: ${action.type}` };
+        } catch (e) {
+            return { success: false, message: `Tab action failed: ${e}` };
+        }
+    }, []);
+
     // Execute actions on current page via content script with multi-step support
     // Returns execution result for adaptive error handling
     const executeActions = useCallback(async (actions: Array<{
@@ -376,52 +458,152 @@ export default function VoiceAgent({
         waitForPage?: boolean;
         needsDom?: boolean;
         description?: string;
+        tabId?: number;
     }>): Promise<{ success: boolean; failedAction?: string; failReason?: string; lastDom?: any }> => {
         if (!actions || actions.length === 0) return { success: true };
 
         try {
             let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (!tab?.id) return { success: false, failReason: 'No active tab' };
+
+            // Note: Global restricted page check removed to allow navigation/safe actions.
+            // Check is now per-action loop.
 
             let lastDom: any | null = null;
 
             for (let i = 0; i < actions.length; i++) {
-                const action = actions[i];
-                console.log(`[Aeyes] Executing action ${i + 1}/${actions.length}:`, action.description || action.type);
+                const rawAction = actions[i];
+                const action: any = {
+                    ...rawAction,
+                    ...((rawAction as any).args || {})
+                };
+                const actionName = action.description || action.type;
 
-                // Handle navigate actions directly with Chrome tabs API
-                if (action.type === 'navigate' && action.value) {
-                    let url = action.value;
-                    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-                        url = 'https://' + url;
+                // Safety Check: Restricted Pages (Only block if we need to interact)
+                if (tab && tab.url && (
+                    tab.url.startsWith('chrome://') ||
+                    tab.url.startsWith('edge://') ||
+                    tab.url.startsWith('about:') ||
+                    tab.url.startsWith('view-source:') ||
+                    tab.url.includes('chrome.google.com/webstore')
+                )) {
+                    // Safe actions: navigation, opening tabs, talking, waiting, scanning
+                    const isSafeAction = ['navigate', 'open_tab', 'switch_tab', 'say', 'ask', 'wait', 'close_tab', 'scan_page', 'notify_plan', 'go_back', 'reload'].includes(action.type);
+                    if (!isSafeAction) {
+                        return {
+                            success: false,
+                            failedAction: actionName,
+                            failReason: 'I cannot interact with this protected browser page. Please try navigating to a different website first.'
+                        };
                     }
+                }
 
-                    const openInNewTab = (action as any).newTab !== false;
+                console.log(`[Aeyes Orchestrator] Step ${i + 1}/${actions.length}: Executing ${action.type}`, action);
 
-                    if (openInNewTab) {
-                        console.log('[Aeyes] Opening in new tab:', url);
-                        const newTab = await chrome.tabs.create({ url });
-                        if (newTab?.id) {
-                            tab = newTab;
+                // 1. Intercept Tab Actions
+                if (['open_tab', 'close_tab', 'switch_tab'].includes(action.type)) {
+                    // Update value/url mapping for tab actions
+                    if (!action.value && action.url) action.value = action.url;
+
+                    const result = await handleTabAction(action);
+                    console.log(`[Aeyes Orchestrator] Tab Action Result:`, result);
+                    if (!result.success) {
+                        return { success: false, failedAction: actionName, failReason: result.message };
+                    }
+                    // Wait for tab switch/create
+                    await new Promise(r => setTimeout(r, 500));
+                    // Refresh current tab reference
+                    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                    continue;
+                }
+
+                // 2. Intercept Communication/Wait Actions
+                if (['say', 'ask', 'wait', 'scan_page', 'notify_plan', 'go_back', 'reload'].includes(action.type)) {
+                    if (action.type === 'wait') {
+                        const duration = parseInt(action.value || (action.args && action.args.duration) || '1000');
+                        await new Promise(r => setTimeout(r, duration));
+                    } else if (action.type === 'scan_page') {
+                        // "scan_page" just means refresh context. We do nothing here, loop continues and extracts DOM.
+                        await new Promise(r => setTimeout(r, 500));
+                    } else if (action.type === 'notify_plan') {
+                        const planText = action.value || (action.args && action.args.plan) || action.args?.text;
+                        if (planText) onPlan?.(planText);
+                    } else if (action.type === 'go_back') {
+                        if (tab?.id) {
+                            await chrome.tabs.goBack(tab.id);
+                            await new Promise(r => setTimeout(r, 1000)); // Wait for nav
+                            // Critical: Refresh tab reference
+                            [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                        }
+                    } else if (action.type === 'reload') {
+                        if (tab?.id) {
+                            await chrome.tabs.reload(tab.id);
+                            await new Promise(r => setTimeout(r, 1500)); // Wait for reload
+                            // Critical: Refresh tab reference
+                            [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
                         }
                     } else {
-                        console.log('[Aeyes] Navigating current tab to:', url);
-                        if (tab.id) {
-                            await chrome.tabs.update(tab.id, { url });
-                        }
-                    }
+                        // "say" or "ask"
+                        const textToSpeak = action.value || (action.args && action.args.text);
+                        if (textToSpeak) {
+                            // Stop any previous audio
+                            stopAudio();
 
-                    if (action.waitForPage !== false) {
-                        await new Promise(resolve => setTimeout(resolve, 2500));
+                            // Visual update (optional, maybe too noisy to show every 'say' action text?)
+                            // onResponse?.(textToSpeak); 
+
+                            // Fetch and play
+                            try {
+                                updateStatus('speaking');
+                                speakingRef.current = true;
+                                const audioUrl = await getAudioUrl(textToSpeak);
+                                const audio = new Audio(audioUrl);
+                                audioElementRef.current = audio;
+
+                                await new Promise<void>((resolve) => {
+                                    audio.onended = () => resolve();
+                                    audio.onerror = () => resolve();
+                                    audio.play().catch(() => resolve());
+                                });
+                                audioElementRef.current = null;
+                                speakingRef.current = false;
+                                updateStatus('processing'); // Go back to processing/listening state
+                            } catch (e) {
+                                console.warn('[Aeyes] TTS failed for action:', e);
+                            }
+                        }
                     }
                     continue;
                 }
 
-                // If action needs DOM, fetch it and resolve the element ID
+                // 3. Handle Navigate (Legacy wrapper)
+                // Normalize url/value
+                if (!action.value && action.url) action.value = action.url;
+
+                if (action.type === 'navigate' && action.value) {
+                    let url = action.value;
+                    if (!url.startsWith('http')) url = 'https://' + url;
+
+                    if ((action as any).newTab) {
+                        await chrome.tabs.create({ url });
+                    } else {
+                        if (tab?.id) await chrome.tabs.update(tab.id, { url });
+                    }
+
+                    if (action.waitForPage !== false) await new Promise(r => setTimeout(r, 2000));
+
+                    // Critical: Refresh tab reference after navigation so subsequent actions see the new URL
+                    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                    continue;
+                }
+
+                if (!tab?.id) return { success: false, failedAction: actionName, failReason: 'No active tab for page action' };
+
+                // 4. Page Actions (Click, Type, etc.)
+
+                // If action needs DOM, fetch it
                 if (action.needsDom) {
                     console.log('[Aeyes] Fetching fresh DOM for element resolution...');
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-
+                    // ... (existing logic for resolve-element) ...
                     // Get fresh DOM from the current page
                     let domContext: any | null = null;
                     try {
@@ -430,18 +612,20 @@ export default function VoiceAgent({
                             domContext = response.data;
                             lastDom = domContext;
                         }
-                    } catch (e) {
+                    } catch (e: any) {
                         console.warn('[Aeyes] Could not extract DOM:', e);
+                        // If it's just a port closed (e.g. during nav), we might want to continue blindly?
+                        // But we need DOM for resolution. If we can't get it, we can't resolve.
+                        // We will return failure for resolution, which is correct.
                         return {
                             success: false,
-                            failedAction: action.description || action.type,
-                            failReason: 'Could not access page content. The page may not be fully loaded.',
-                            lastDom: lastDom || undefined
+                            failedAction: actionName,
+                            failReason: 'Could not fetch DOM for resolution: ' + (e.message || 'Unknown error')
                         };
                     }
 
                     if (domContext && (action as any).description) {
-                        console.log('[Aeyes] Resolving element:', (action as any).description);
+                        // Backend Resolution Call
                         try {
                             const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
                             const resolveResponse = await fetch(`${backendUrl}/resolve-element`, {
@@ -456,77 +640,62 @@ export default function VoiceAgent({
                             });
 
                             const resolved = await resolveResponse.json();
-                            console.log('[Aeyes] Element resolution result:', resolved);
-
                             if (resolved.success && resolved.element_id) {
                                 action.elementId = resolved.element_id;
                             } else {
-                                // Element not found - return failure for adaptive handling
                                 return {
                                     success: false,
-                                    failedAction: (action as any).description || action.type,
-                                    failReason: `Could not find "${(action as any).description}". ${resolved.message || 'Element may not be visible, may need to scroll, or login may be required.'}`,
-                                    lastDom: domContext
+                                    failedAction: actionName,
+                                    failReason: `Resolution failed: ${resolved.message}`
                                 };
                             }
                         } catch (e) {
-                            console.error('[Aeyes] Element resolution API failed:', e);
-                            return {
-                                success: false,
-                                failedAction: (action as any).description || action.type,
-                                failReason: 'Failed to communicate with backend',
-                                lastDom: domContext
-                            };
+                            return { success: false, failedAction: actionName, failReason: 'Backend resolution error' };
                         }
                     }
                 }
 
-                // Execute the action via content script
+                // Send to Content Script
                 try {
                     const result = await chrome.tabs.sendMessage(tab.id!, { type: 'EXECUTE_ACTION', action });
-                    if (result && !result.success) {
+                    console.log(`[Aeyes Orchestrator] Action Result:`, result);
+
+                    if (!result || !result.success) {
                         return {
                             success: false,
-                            failedAction: action.description || action.type,
-                            failReason: result.message || 'Action failed',
+                            failedAction: actionName,
+                            failReason: result?.message || 'Content script error',
                             lastDom: lastDom || undefined
                         };
                     }
-                } catch (e) {
-                    console.warn('[Aeyes] Content script not available:', action.type);
-                    return {
-                        success: false,
-                        failedAction: action.description || action.type,
-                        failReason: 'Page is not accessible (may be a restricted page)',
-                        lastDom: lastDom || undefined
-                    };
+                } catch (e: any) {
+                    // Check if error is due to page unloading (navigation)
+                    if (e.message && (e.message.includes('message port closed') || e.message.includes('receiving end does not exist'))) {
+                        console.log('[Aeyes] Action caused probable navigation (port closed). checks out.');
+                        return { success: true, lastDom: undefined };
+                    }
+                    return { success: false, failedAction: actionName, failReason: 'Content script unreachable. Try reloading the page.' };
                 }
 
-                if (action.waitForPage) {
-                    console.log('[Aeyes] Waiting for page to load...');
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                }
-
-                if (i < actions.length - 1) {
-                    await new Promise(resolve => setTimeout(resolve, 300));
-                }
+                // Post-Action Wait
+                await new Promise(r => setTimeout(r, 500));
             }
 
             console.log('[Aeyes] All actions completed successfully');
             return { success: true, lastDom: lastDom || undefined };
-        } catch (error) {
+        } catch (error: any) {
             console.error('[Aeyes] Action execution failed:', error);
             return {
                 success: false,
-                failReason: 'Unexpected error during action execution'
+                failedAction: 'execution_error',
+                failReason: `Unexpected error: ${error.message}`
             };
         }
-    }, []);
+    }, [handleTabAction]);
 
     const processTranscript = useCallback(async (text: string) => {
         if (processingRef.current) return;
         processingRef.current = true;
-        stoppedManuallyRef.current = false; // Reset start
 
         // Stop listening during processing phase
         abortListening();
@@ -556,13 +725,31 @@ export default function VoiceAgent({
                 stepCount++;
 
                 // 1. Get DOM context from current page
+                // Note: On restricted pages, extractDOMWithRetry will return null (handled deep in extractDOMFromPage via message error or simple null return)
+                // But we don't want to crash. 
+                // We should probably check URL here too to avoid "I can't see" loop if we are genuinely on newtab.
+                // But let's let backend handle "I can't see anything" naturally.
                 loopDomContext = await extractDOMWithRetry();
+                const pageContext = await capturePageContext();
 
                 // Safety: If follow-up requested but NO DOM, break loop to prevent infinite recursion
                 if (stepCount > 1 && !loopDomContext && !response?.actions?.length) {
-                    console.warn('[Aeyes] Infinite loop risk: Follow-up requested but no DOM available.');
-                    finalResponseText = "I can't see the page content right now. Please make sure you're on an accessible web page.";
-                    break;
+                    // Exception: we might be navigating.
+                    // If we just navigated, loopDomContext might be null temporarily.
+                    // But if we are persistently null, we break.
+
+                    // Simple logic: if connection is good, proceed.
+                    // If restricted page, we likely have NULL dom, but we might want to ask questions.
+                    // We'll let it proceed. 
+                    // Wait-- original logic blocked if !loopDomContext.
+                    // Let's modify: if page is protected, we proceed WITHOUT dom.
+
+                    const isProtected = pageContext?.url?.startsWith('chrome://') || pageContext?.url?.startsWith('edge://');
+                    if (!isProtected) {
+                        console.warn('[Aeyes] Infinite loop risk: Follow-up requested but no DOM available.');
+                        finalResponseText = "I can't see the page content right now. Please make sure you're on an accessible web page.";
+                        break;
+                    }
                 }
 
 
@@ -570,6 +757,7 @@ export default function VoiceAgent({
                 response = await sendToBackend({
                     transcript: currentTranscript,
                     context: loopDomContext || undefined,
+                    page_context: pageContext || undefined,
                     conversation_id: currentConversationId || undefined
                 });
 
@@ -845,6 +1033,40 @@ export default function VoiceAgent({
             {error && !needsPermission && (
                 <p className="error-text animate-fade-in">{error}</p>
             )}
+
+            {/* Debug Controls */}
+            <div style={{ marginTop: '20px', borderTop: '1px solid #333', paddingTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                    className="kbd"
+                    style={{ cursor: 'pointer', background: '#333', color: '#fff', border: 'none', padding: '6px 10px' }}
+                    onClick={async () => {
+                        try {
+                            const res = await fetch('http://localhost:8000/health');
+                            const data = await res.json();
+                            alert('Backend Health: ' + JSON.stringify(data));
+                        } catch (e: any) {
+                            alert('Backend Error: ' + e.message);
+                        }
+                    }}
+                >
+                    Test Health
+                </button>
+                <button
+                    className="kbd"
+                    style={{ cursor: 'pointer', background: '#333', color: '#fff', border: 'none', padding: '6px 10px' }}
+                    onClick={async () => {
+                        try {
+                            const url = await getAudioUrl('Testing text to speech connection.');
+                            const audio = new Audio(url);
+                            audio.play();
+                        } catch (e: any) {
+                            alert('TTS Error: ' + e.message);
+                        }
+                    }}
+                >
+                    Test Speak
+                </button>
+            </div>
         </div>
     );
 }
@@ -874,4 +1096,3 @@ function StopIconSmall() {
         </svg>
     );
 }
-

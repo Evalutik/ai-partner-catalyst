@@ -5,7 +5,7 @@ import AnimatedMessage from './AnimatedMessage';
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
 
 interface Message {
-    type: 'user' | 'agent';
+    type: 'user' | 'agent' | 'plan';
     text: string;
 }
 
@@ -46,6 +46,10 @@ export default function App() {
         setMessages(prev => [...prev, { type: 'agent', text }]);
     };
 
+    const handlePlan = (text: string) => {
+        setMessages(prev => [...prev, { type: 'plan', text }]);
+    };
+
     const [permissionRequired, setPermissionRequired] = useState(false);
 
     // Reversed messages - newest first
@@ -66,6 +70,7 @@ export default function App() {
                     onTranscript={handleTranscript}
                     onStreamingTranscript={setStreamingText}
                     onResponse={handleResponse}
+                    onPlan={handlePlan}
                     autoStart={!autoStarted}
                     onAutoStartComplete={() => setAutoStarted(true)}
                     status={status}
@@ -94,16 +99,16 @@ export default function App() {
                         {reversedMessages.map((msg, i) => (
                             <div
                                 key={messages.length - 1 - i}
-                                className={`message animate-fade-in ${msg.type === 'user' ? 'message-user' : 'message-agent'}`}
+                                className={`message animate-fade-in ${msg.type === 'user' ? 'message-user' : msg.type === 'plan' ? 'message-plan text-xs italic opacity-70' : 'message-agent'}`}
                             >
                                 <div className="message-label">
-                                    {msg.type === 'user' ? 'You' : 'Aeyes.'}
+                                    {msg.type === 'user' ? 'You' : msg.type === 'plan' ? 'Plan' : 'Aeyes.'}
                                 </div>
                                 <AnimatedMessage
                                     text={msg.text}
                                     isUser={msg.type === 'user'}
                                     speed={msg.type === 'user' ? 80 : 250}
-                                    startVisible={msg.type === 'user'} // Instant show for user history (since it was just streamed)
+                                    startVisible={msg.type === 'user' || msg.type === 'plan'} // Instant show for user history and plans
                                 />
                             </div>
                         ))}
