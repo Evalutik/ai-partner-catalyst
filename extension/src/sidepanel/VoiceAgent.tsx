@@ -352,16 +352,55 @@ export default function VoiceAgent({
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
             if (!tab?.id) return null;
 
-            const response = await chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_DOM' });
-            if (response?.success && response?.data) {
-                return response.data; // Return object directly
-            }
-            return null;
-            // patched catch block
-        } catch (e: any) {
-            if (e.message && (e.message.includes('message port closed') || e.message.includes('receiving end does not exist'))) {
+            // Check if it's a restricted page where we can't inject
+            if (tab.url && (
+                tab.url.startsWith('chrome://') ||
+                tab.url.startsWith('edge://') ||
+                tab.url.startsWith('about:') ||
+                tab.url.startsWith('view-source:') ||
+                tab.url.includes('chrome.google.com/webstore')
+            )) {
+                console.log('[Aeyes] Skipping content script for restricted page:', tab.url);
                 return null;
             }
+
+            try {
+                const response = await chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_DOM' });
+                if (response?.success && response?.data) {
+                    return response.data;
+                }
+                return null;
+            } catch (e: any) {
+                // Check if content script is unreachable
+                const isConnectionError = e.message && (
+                    e.message.includes('message port closed') ||
+                    e.message.includes('receiving end does not exist') ||
+                    e.message.includes('Could not establish connection')
+                );
+
+                if (isConnectionError) {
+                    console.log('[Aeyes] Content script not found, attempting to inject...');
+                    try {
+                        await chrome.scripting.executeScript({
+                            target: { tabId: tab.id },
+                            files: ['content.js']
+                        });
+                        console.log('[Aeyes] Content script injected successfully, retrying...');
+                        await new Promise(r => setTimeout(r, 300));
+
+                        // Retry the message
+                        const retryResponse = await chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_DOM' });
+                        if (retryResponse?.success && retryResponse?.data) {
+                            return retryResponse.data;
+                        }
+                    } catch (injectError: any) {
+                        console.warn('[Aeyes] Failed to inject content script:', injectError.message);
+                    }
+                }
+                return null;
+            }
+        } catch (e: any) {
+            console.warn('[Aeyes] extractDOMFromPage failed:', e.message);
             return null;
         }
     }, []);
@@ -695,12 +734,49 @@ export default function VoiceAgent({
                         };
                     }
                 } catch (e: any) {
-                    // Check if error is due to page unloading (navigation)
-                    if (e.message && (e.message.includes('message port closed') || e.message.includes('receiving end does not exist'))) {
-                        console.log('[Aeyes] Action caused probable navigation (port closed). checks out.');
-                        return { success: true, lastDom: undefined };
+                    // Check if error is due to content script being unreachable
+                    const isConnectionError = e.message && (
+                        e.message.includes('message port closed') ||
+                        e.message.includes('receiving end does not exist') ||
+                        e.message.includes('Could not establish connection')
+                    );
+
+                    if (isConnectionError) {
+                        console.log('[Aeyes] Content script unreachable, attempting to inject...');
+
+                        // Try to inject content script and retry
+                        try {
+                            await chrome.scripting.executeScript({
+                                target: { tabId: tab.id! },
+                                files: ['content.js']
+                            });
+                            console.log('[Aeyes] Content script injected successfully, retrying action...');
+                            await new Promise(r => setTimeout(r, 300));
+
+                            // Retry the action after injection
+                            const retryResult = await chrome.tabs.sendMessage(tab.id!, { type: 'EXECUTE_ACTION', action });
+                            console.log(`[Aeyes Orchestrator] Retry Action Result:`, retryResult);
+
+                            if (!retryResult || !retryResult.success) {
+                                return {
+                                    success: false,
+                                    failedAction: actionName,
+                                    failReason: retryResult?.message || 'Content script error after injection',
+                                    lastDom: lastDom || undefined
+                                };
+                            }
+                        } catch (injectError: any) {
+                            // Check if this was actually a navigation happening
+                            if (injectError.message && injectError.message.includes('message port closed')) {
+                                console.log('[Aeyes] Action likely caused navigation (port closed after retry).');
+                                return { success: true, lastDom: undefined };
+                            }
+                            console.warn('[Aeyes] Failed to inject/execute:', injectError.message);
+                            return { success: false, failedAction: actionName, failReason: 'Content script unreachable. Please reload the page and try again.' };
+                        }
+                    } else {
+                        return { success: false, failedAction: actionName, failReason: 'Content script error: ' + e.message };
                     }
-                    return { success: false, failedAction: actionName, failReason: 'Content script unreachable. Try reloading the page.' };
                 }
 
                 // Post-Action Wait
