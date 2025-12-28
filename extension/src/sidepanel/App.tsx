@@ -99,17 +99,21 @@ export default function App() {
                         {reversedMessages.map((msg, i) => (
                             <div
                                 key={messages.length - 1 - i}
-                                className={`message animate-fade-in ${msg.type === 'user' ? 'message-user' : msg.type === 'plan' ? 'message-plan text-xs italic opacity-70' : 'message-agent'}`}
+                                className={`message animate-fade-in ${msg.type === 'user' ? 'message-user' : msg.type === 'plan' ? 'message-plan' : 'message-agent'}`}
                             >
                                 <div className="message-label">
                                     {msg.type === 'user' ? 'You' : msg.type === 'plan' ? 'Plan' : 'Aeyes.'}
                                 </div>
-                                <AnimatedMessage
-                                    text={msg.text}
-                                    isUser={msg.type === 'user'}
-                                    speed={msg.type === 'user' ? 80 : 250}
-                                    startVisible={msg.type === 'user' || msg.type === 'plan'} // Instant show for user history and plans
-                                />
+                                {msg.type === 'plan' ? (
+                                    <div className="message-text message-plan">{msg.text}</div>
+                                ) : (
+                                    <AnimatedMessage
+                                        text={msg.text}
+                                        isUser={msg.type === 'user'}
+                                        speed={msg.type === 'user' ? 80 : 250}
+                                        startVisible={msg.type === 'user'}
+                                    />
+                                )}
                             </div>
                         ))}
                     </div>

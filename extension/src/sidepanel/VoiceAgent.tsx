@@ -44,6 +44,7 @@ export default function VoiceAgent({
     const processingRef = useRef(false);
     const speakingRef = useRef(false); // Synchronous speaking state
     const lastSpokenTextRef = useRef<string>(''); // For echo cancellation
+    const lastShownPlanRef = useRef<string>(''); // For plan deduplication
     const silenceTimeoutRef = useRef<number | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const analyserRef = useRef<AnalyserNode | null>(null);
@@ -591,7 +592,20 @@ export default function VoiceAgent({
                         }
                     } else if (action.type === 'notify_plan') {
                         const planText = action.value || (action.args && action.args.plan) || action.args?.text;
-                        if (planText) onPlan?.(planText);
+                        if (planText) {
+                            // Only show in UI if this is a NEW plan (different from last shown)
+                            if (planText !== lastShownPlanRef.current) {
+                                onPlan?.(planText);
+                                lastShownPlanRef.current = planText;
+                                console.log('[Aeyes] Plan shown in UI:', planText);
+
+                                // WAIT 3 SECONDS after showing plan to let user read it
+                                await new Promise(r => setTimeout(r, 3000));
+                            } else {
+                                // Same plan repeated - just log to console
+                                console.log('[Aeyes] Plan already shown, skipping UI update:', planText);
+                            }
+                        }
                     } else if (action.type === 'go_back') {
                         if (tab?.id) {
                             await chrome.tabs.goBack(tab.id);
@@ -807,11 +821,14 @@ export default function VoiceAgent({
 
         updateStatus('processing');
 
-        const MAX_TOTAL_STEPS = 30; // Increased to 50 to handle complex multi-step tasks
+        const MAX_TOTAL_STEPS = 30;
         const MAX_CONSECUTIVE_FAILURES = 3;
+        const MAX_SAME_PLAN_REPEATS = 3; // Detect loops when same plan repeats too many times
 
         let stepCount = 0;
         let consecutiveFailures = 0;
+        let samePlanRepeatCount = 0; // Track how many times the same plan is sent
+        let lastPlanText = ''; // Track the last plan to detect repeats
         let currentTranscript = capitalizedText;
         let finalResponseText = '';
         let loopDomContext: any | null = null; // Track DOM across loop
@@ -869,6 +886,23 @@ export default function VoiceAgent({
                 if (response.conversation_id) {
                     currentConversationId = response.conversation_id; // Update local loop var
                     if (!conversationId) setConversationId(response.conversation_id); // Sync React state if needed
+                }
+
+                // 2b. Loop Detection - check if we're getting the same plan repeatedly
+                const currentPlan = response.actions?.find((a: any) => a.type === 'notify_plan');
+                if (currentPlan) {
+                    const planText = currentPlan.value || currentPlan.args?.plan || currentPlan.args?.text || '';
+                    if (planText === lastPlanText) {
+                        samePlanRepeatCount++;
+                        console.warn(`[Aeyes] Same plan repeated ${samePlanRepeatCount} times`);
+                        if (samePlanRepeatCount >= MAX_SAME_PLAN_REPEATS) {
+                            console.warn('[Aeyes] Loop detected - same plan repeated many times. continuing...');
+                            // DO NOT BREAK - User requested to keep going
+                        }
+                    } else {
+                        samePlanRepeatCount = 1; // Reset counter for new plan
+                        lastPlanText = planText;
+                    }
                 }
 
                 // 3. Execute actions if any

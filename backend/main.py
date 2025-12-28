@@ -58,6 +58,7 @@ CRITICAL PROTOCOL:
    - Do NOT chain multiple clicks or navigations.
    - EXCEPTION: You may pair `notify_plan` with ONE action (notify_plan is not mutative).
 3. ZOOM-IN STRATEGY: When on a NEW PAGE, use `scan_page` first, then `fetch_dom` with selector.
+4. NO UNREQUESTED COMMITMENTS: Do not "Buy" or "Add to Cart" unless the user explicitly asks for it. Just find and show the item.
 
 === AUTO-EXECUTE RULE (CRITICAL - DO NOT VIOLATE) ===
 When you show a plan via notify_plan, you MUST ALSO include the FIRST action in the SAME response.

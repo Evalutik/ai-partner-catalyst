@@ -188,6 +188,11 @@ body {
   text-transform: uppercase;
 }
 
+.message-plan {
+  white-space: pre-wrap;
+  margin-top: 4px;
+}
+
 /* Divider between messages */
 .message+.message {
   border-top: 1px solid #1a1a1a;
