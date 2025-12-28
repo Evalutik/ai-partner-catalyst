@@ -444,6 +444,7 @@ async def speak(request: SpeakRequest):
         )
     except Exception as e:
         error_msg = str(e)
+        print(f"[Aeyes] TTS Error: {error_msg}")  # Added logging
         if "quota_exceeded" in error_msg.lower():
             error_msg = "ElevenLabs API quota exceeded. Please check your account credits."
         raise HTTPException(status_code=500, detail=error_msg)

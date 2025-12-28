@@ -66,7 +66,20 @@ export async function getAudioUrl(text: string): Promise<string> {
     });
 
     if (!response.ok) {
-        throw new Error(`TTS error: ${response.status}`);
+        let errorMessage = `TTS error: ${response.status}`;
+        try {
+            const errorJson = await response.json();
+            if (errorJson.detail) {
+                errorMessage += ` - ${errorJson.detail}`;
+            }
+        } catch (e) {
+            // fallback to text if not json
+            const errorText = await response.text();
+            if (errorText) {
+                errorMessage += ` - ${errorText}`;
+            }
+        }
+        throw new Error(errorMessage);
     }
 
     // Return blob URL for audio playback
