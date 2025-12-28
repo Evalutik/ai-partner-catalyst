@@ -517,13 +517,39 @@ export default function VoiceAgent({
                 }
 
                 // 2. Intercept Communication/Wait Actions
-                if (['say', 'ask', 'wait', 'scan_page', 'notify_plan', 'go_back', 'reload'].includes(action.type)) {
+                if (['say', 'ask', 'wait', 'scan_page', 'notify_plan', 'go_back', 'reload', 'fetch_dom', 'get_page_status'].includes(action.type)) {
                     if (action.type === 'wait') {
                         const duration = parseInt(action.value || (action.args && action.args.duration) || '1000');
                         await new Promise(r => setTimeout(r, duration));
                     } else if (action.type === 'scan_page') {
                         // "scan_page" just means refresh context. We do nothing here, loop continues and extracts DOM.
                         await new Promise(r => setTimeout(r, 500));
+                    } else if (action.type === 'fetch_dom') {
+                        // Execute DOM extraction with optional selector and optimize flag
+                        if (tab?.id) {
+                            try {
+                                const selector = action.args?.selector || '';
+                                const limit = action.args?.limit || 50;
+                                const optimize = action.args?.optimize ?? true;
+                                await chrome.tabs.sendMessage(tab.id, {
+                                    type: 'EXTRACT_DOM',
+                                    selector,
+                                    limit,
+                                    optimize
+                                });
+                            } catch (e) {
+                                console.warn('[Aeyes] fetch_dom failed:', e);
+                            }
+                        }
+                    } else if (action.type === 'get_page_status') {
+                        // Execute page status check
+                        if (tab?.id) {
+                            try {
+                                await chrome.tabs.sendMessage(tab.id, { type: 'GET_PAGE_STATUS' });
+                            } catch (e) {
+                                console.warn('[Aeyes] get_page_status failed:', e);
+                            }
+                        }
                     } else if (action.type === 'notify_plan') {
                         const planText = action.value || (action.args && action.args.plan) || action.args?.text;
                         if (planText) onPlan?.(planText);
@@ -705,7 +731,7 @@ export default function VoiceAgent({
 
         updateStatus('processing');
 
-        const MAX_TOTAL_STEPS = 10; // Increased to 10 to handle complex tasks
+        const MAX_TOTAL_STEPS = 30; // Increased to 50 to handle complex multi-step tasks
         const MAX_CONSECUTIVE_FAILURES = 3;
 
         let stepCount = 0;
@@ -773,6 +799,21 @@ export default function VoiceAgent({
                 let actionResult = { success: true } as { success: boolean; failedAction?: string; failReason?: string; lastDom?: any };
                 if (response.actions && response.actions.length > 0) {
                     actionResult = await executeActions(response.actions);
+                }
+
+                // 3b. Execute post_analysis tools if actions succeeded
+                // This implements "Execute Action -> Execute Analysis -> Return Combined Result"
+                if (actionResult.success && response.post_analysis && response.post_analysis.length > 0) {
+                    console.log('[Aeyes] Executing post_analysis tools:', response.post_analysis);
+                    // Small delay to let page settle after action
+                    await new Promise(resolve => setTimeout(resolve, 500));
+
+                    // Execute perception tools (results feed into next loop iteration via DOM extraction)
+                    const analysisResult = await executeActions(response.post_analysis);
+                    if (!analysisResult.success) {
+                        console.warn('[Aeyes] Post-analysis failed:', analysisResult.failReason);
+                        // Don't fail the whole action, just log the warning
+                    }
                 }
 
                 if (stoppedManuallyRef.current) break;

@@ -96,8 +96,17 @@ JSON OUTPUT FORMAT:
   "actions": [
     { "type": "tool_name", "args": { ...arguments... } }
   ],
+  "post_analysis": [
+    { "type": "perception_tool", "args": { ... } }
+  ],
   "requiresFollowUp": boolean // Set TRUE if you need to see the result of this action to continue.
 }
+
+POST-ANALYSIS PATTERN:
+- Use `post_analysis` to specify perception tools (scan_page, fetch_dom, get_page_status) that should run AFTER the action completes.
+- This is useful for: confirming an action worked, getting updated DOM after a click, measuring page changes.
+- The frontend will: Execute action -> Wait -> Execute post_analysis tools -> Return combined result.
+- ONLY perception tools are allowed in post_analysis (no clicks, types, etc).
 
 EXAMPLE (Search for cats):
 User: "Search for cats"
@@ -105,6 +114,9 @@ User: "Search for cats"
   "response": "Searching for cats...",
   "actions": [
     { "type": "type", "args": { "elementId": "el-12", "value": "cats", "submit": true } }
+  ],
+  "post_analysis": [
+    { "type": "get_page_status", "args": {} }
   ],
   "requiresFollowUp": true
 }
@@ -159,6 +171,7 @@ class Action(BaseModel):
 class ConversationResponse(BaseModel):
     response: str
     actions: list[Action] | None = None
+    post_analysis: list[Action] | None = None  # Tools to run AFTER action completes
     requiresFollowUp: bool = False
     conversation_id: str | None = None
 
@@ -280,6 +293,7 @@ Analyze the request and context. Respond with JSON based on the System Protocol.
         assistant_response = parsed.get("response", "I'm on it.")
         raw_actions = parsed.get("actions", [])
         requires_follow_up = parsed.get("requiresFollowUp", False)
+        raw_post_analysis = parsed.get("post_analysis", [])
 
         # Normalize actions to list of Action objects
         valid_actions = []
@@ -287,6 +301,13 @@ Analyze the request and context. Respond with JSON based on the System Protocol.
             for act in raw_actions:
                 if isinstance(act, dict) and "type" in act:
                     valid_actions.append(Action(type=act["type"], args=act.get("args", {})))
+
+        # Normalize post_analysis to list of Action objects
+        valid_post_analysis = []
+        if raw_post_analysis:
+            for act in raw_post_analysis:
+                if isinstance(act, dict) and "type" in act:
+                    valid_post_analysis.append(Action(type=act["type"], args=act.get("args", {})))
 
         # Add assistant response to history
         history.append({
@@ -299,6 +320,7 @@ Analyze the request and context. Respond with JSON based on the System Protocol.
         return ConversationResponse(
             response=assistant_response,
             actions=valid_actions,
+            post_analysis=valid_post_analysis if valid_post_analysis else None,
             requiresFollowUp=requires_follow_up,
             conversation_id=conversation_id
         )

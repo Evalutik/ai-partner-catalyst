@@ -4,7 +4,7 @@
 chrome.runtime.onMessage.addListener(
     (message: { type: string;[key: string]: any }, _sender, sendResponse) => {
         if (message.type === 'EXTRACT_DOM') {
-            const dom = extractDOM(message.selector, message.limit);
+            const dom = extractDOM(message.selector, message.limit, message.optimize ?? true);
             sendResponse({ success: true, data: dom });
             return;
         }
@@ -174,8 +174,8 @@ function scanPage(_maxDepth: number = 2): PageStructure {
     };
 }
 
-function extractDOM(selector?: string, limit: number = 50): DOMSnapshot {
-    console.log(`[Aeyes Content] Extracting DOM. Selector: "${selector || 'ALL'}", Limit: ${limit}`);
+function extractDOM(selector?: string, limit: number = 50, optimize: boolean = true): DOMSnapshot {
+    console.log(`[Aeyes Content] Extracting DOM. Selector: "${selector || 'ALL'}", Limit: ${limit}, Optimize: ${optimize}`);
     const startTime = performance.now();
     try {
         let candidateSet = new Set<HTMLElement>();
@@ -238,6 +238,24 @@ function extractDOM(selector?: string, limit: number = 50): DOMSnapshot {
             // SKIP EMPTY NON-INPUTS
             if (!textRaw && !(el instanceof HTMLInputElement) && !(el instanceof HTMLSelectElement) && !(el as HTMLElement).getAttribute('aria-label')) {
                 continue;
+            }
+
+            // OPTIMIZATION: Skip pure wrapper elements when optimize is true
+            if (optimize) {
+                const tagLower = el.tagName.toLowerCase();
+                const isWrapper = ['div', 'span', 'section', 'article', 'aside', 'main', 'header', 'footer', 'nav'].includes(tagLower);
+                const hasNoRole = !el.getAttribute('role');
+                const hasNoAriaLabel = !el.getAttribute('aria-label');
+                const hasNoOnClick = !el.hasAttribute('onclick');
+                const isNotTabable = el.getAttribute('tabindex') === '-1' || !el.hasAttribute('tabindex');
+
+                // Skip if it's a structural wrapper with no interactive semantics
+                if (isWrapper && hasNoRole && hasNoAriaLabel && hasNoOnClick && isNotTabable) {
+                    // But keep it if it has meaningful short text (potential label/heading)
+                    if (!textRaw || textRaw.length > 200) {
+                        continue;
+                    }
+                }
             }
 
             let displayText = textRaw;
