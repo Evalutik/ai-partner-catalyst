@@ -16,6 +16,7 @@ interface VoiceAgentProps {
     onPermissionRequired?: (required: boolean) => void;
     onStreamingTranscript?: (text: string) => void;
     onPlan?: (text: string) => void;
+    onClearPlan?: () => void;
 }
 
 export default function VoiceAgent({
@@ -23,11 +24,12 @@ export default function VoiceAgent({
     onTranscript,
     onResponse,
     autoStart = false,
-    onAutoStartComplete,
+    onAutoStartComplete: _onAutoStartComplete, // Unused but kept for API compatibility
     status,
     onPermissionRequired,
     onStreamingTranscript,
-    onPlan
+    onPlan,
+    onClearPlan
 }: VoiceAgentProps) {
     const [error, setError] = useState<string | null>(null);
     const [audioLevel, setAudioLevel] = useState<number[]>(new Array(16).fill(0));
@@ -36,6 +38,7 @@ export default function VoiceAgent({
     const [conversationId, setConversationId] = useState<string | null>(null);
     const [hasGreeted, setHasGreeted] = useState(false);
     const [isPaused, setIsPaused] = useState(false); // Listening paused by user
+    const [isStandby, setIsStandby] = useState(false); // Wake word listening mode
 
     // Refs for audio and processing state
     const statusRef = useRef(status);
@@ -50,6 +53,8 @@ export default function VoiceAgent({
     const analyserRef = useRef<AnalyserNode | null>(null);
     const animationFrameRef = useRef<number | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
+    const abortControllerRef = useRef<AbortController | null>(null); // For cancelling in-flight requests
+    const isStandbyRef = useRef(false); // Sync ref for standby mode
 
     const {
         isListening,
@@ -160,6 +165,14 @@ export default function VoiceAgent({
         speakingRef.current = false; // Ensure speaking flag is cleared
     }, []);
 
+    // Cancel all in-flight requests
+    const cancelRequests = useCallback(() => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+    }, []);
+
     const playGreeting = useCallback(async () => {
         if (hasGreetedRef.current) return;
         hasGreetedRef.current = true;
@@ -229,6 +242,56 @@ export default function VoiceAgent({
         };
     }, [stopAudioVisualization, stopAudio]);
 
+    // Wake word detection helper
+    const checkForWakeWord = useCallback((text: string): boolean => {
+        const normalizedText = text.toLowerCase().trim();
+        const wakeWords = ['aeyes', 'a eyes', 'eyes', 'hey eyes', 'hey aeyes', 'hi eyes', 'hi aeyes'];
+        return wakeWords.some(word => normalizedText.includes(word));
+    }, []);
+
+    // Handle wake word activation
+    const activateFromStandby = useCallback(async () => {
+        console.log('[Aeyes] Wake word detected! Activating...');
+        setIsStandby(false);
+        isStandbyRef.current = false;
+
+        // Play activation sound and speak
+        await playUnmuteSound();
+        updateStatus('speaking');
+        speakingRef.current = true;
+
+        const wakeResponse = "Yes, how can I help you?";
+
+        try {
+            const audioUrl = await getAudioUrl(wakeResponse);
+            const audio = new Audio(audioUrl);
+            audioElementRef.current = audio;
+            lastSpokenTextRef.current = wakeResponse.toLowerCase(); // Echo protection
+            onResponse?.(wakeResponse);
+
+            await new Promise<void>((resolve) => {
+                audio.onended = () => resolve();
+                audio.onerror = () => resolve();
+                audio.play().catch(() => resolve());
+            });
+
+            audioElementRef.current = null;
+            speakingRef.current = false;
+
+            // Wait for echo to dissipate
+            await new Promise(r => setTimeout(r, 500));
+
+            // Start active listening
+            await playListeningSound();
+            startListening();
+            updateStatus('listening');
+        } catch (e) {
+            console.warn('[Aeyes] Wake activation failed:', e);
+            updateStatus('idle');
+            speakingRef.current = false;
+        }
+    }, [updateStatus, startListening, onResponse]);
+
     useEffect(() => {
         // STRICT GUARD: Ignore any input if we are processing or speaking
         if (statusRef.current === 'processing' || statusRef.current === 'speaking' || processingRef.current || speakingRef.current) return;
@@ -236,6 +299,16 @@ export default function VoiceAgent({
         // Calculate current real-time text
         // transcript is automatically reset by startListening(), so we can use it directly
         const fullCurrentText = (transcript + interimTranscript).trim();
+
+        // STANDBY MODE: Only listen for wake words
+        if (isStandbyRef.current) {
+            if (fullCurrentText && checkForWakeWord(fullCurrentText)) {
+                activateFromStandby();
+                return;
+            }
+            // In standby, don't show transcript or process anything else
+            return;
+        }
 
         // Echo Masking
 
@@ -593,17 +666,15 @@ export default function VoiceAgent({
                     } else if (action.type === 'notify_plan') {
                         const planText = action.value || (action.args && action.args.plan) || action.args?.text;
                         if (planText) {
-                            // Only show in UI if this is a NEW plan (different from last shown)
+                            // Show plan in UI and log to console
                             if (planText !== lastShownPlanRef.current) {
-                                onPlan?.(planText);
+                                console.log('[Aeyes Plan]', planText);
                                 lastShownPlanRef.current = planText;
-                                console.log('[Aeyes] Plan shown in UI:', planText);
-
-                                // WAIT 3 SECONDS after showing plan to let user read it
-                                await new Promise(r => setTimeout(r, 3000));
+                                onPlan?.(planText); // Show in UI
+                                // Brief pause to let plan processing settle
+                                await new Promise(r => setTimeout(r, 500));
                             } else {
-                                // Same plan repeated - just log to console
-                                console.log('[Aeyes] Plan already shown, skipping UI update:', planText);
+                                console.log('[Aeyes Plan] (unchanged)', planText);
                             }
                         }
                     } else if (action.type === 'go_back') {
@@ -813,6 +884,10 @@ export default function VoiceAgent({
         if (processingRef.current) return;
         processingRef.current = true;
 
+        // Create new AbortController for this processing session
+        abortControllerRef.current = new AbortController();
+        const signal = abortControllerRef.current.signal;
+
         // Stop listening during processing phase
         abortListening();
 
@@ -872,13 +947,16 @@ export default function VoiceAgent({
                 }
 
 
+                // Check abort before sending
+                if (signal.aborted) break;
+
                 // 2. Send transcript AND context to backend with conversation ID
                 response = await sendToBackend({
                     transcript: currentTranscript,
                     context: loopDomContext || undefined,
                     page_context: pageContext || undefined,
                     conversation_id: currentConversationId || undefined
-                });
+                }, signal);
 
                 if (stoppedManuallyRef.current) break;
 
@@ -987,10 +1065,17 @@ export default function VoiceAgent({
                 }
             }
 
+            // Check if cancelled before speaking
+            if (stoppedManuallyRef.current || signal.aborted) {
+                updateStatus('idle');
+                processingRef.current = false;
+                return;
+            }
+
             // Speak final response
             updateStatus('speaking');
             speakingRef.current = true;
-            const audioUrl = await getAudioUrl(finalResponseText);
+            const audioUrl = await getAudioUrl(finalResponseText, signal);
 
             if (stoppedManuallyRef.current) { updateStatus('idle'); return; }
 
@@ -1013,18 +1098,34 @@ export default function VoiceAgent({
             audioElementRef.current = null;
             speakingRef.current = false;
 
-            // Restart listening if not paused
-            // CRITICAL: Check stoppedManuallyRef instead of just isPausedRef
+            // Task complete - clear plan and enter STANDBY mode
+            onClearPlan?.();
+            lastShownPlanRef.current = ''; // Reset plan tracking
+            setConversationId(null); // Reset conversation for next task
+
+            // STANDBY MODE: Show as idle but keep listening for wake words
             if (!stoppedManuallyRef.current && !isPausedRef.current) {
                 // Wait delay to ensure audio is fully done and avoid self-hearing
-                // Increased to 1000ms to allow physical Room Echo to dissipate naturally
                 await new Promise(resolve => setTimeout(resolve, 1000));
 
                 if (!stoppedManuallyRef.current && !isPausedRef.current) {
-                    await playDoneSound();
-                    await playListeningSound();
-                    startListening();
-                    updateStatus('listening');
+                    // Enter standby mode - listening in background for wake word
+                    setIsStandby(true);
+                    isStandbyRef.current = true;
+                    stoppedManuallyRef.current = false; // Ensure we are allowed to listen
+
+                    await playMuteSound(); // Indicate going to sleep
+
+                    // CRITICAL: Start audio visualization AND speech recognition
+                    const visSuccess = await startAudioVisualization();
+                    if (visSuccess) {
+                        startListening();
+                        console.log('[Aeyes] Entering standby mode - listening for wake word "Aeyes"');
+                    } else {
+                        console.warn('[Aeyes] Failed to start standby visualization');
+                    }
+
+                    updateStatus('idle');
                 } else {
                     updateStatus('idle');
                 }
@@ -1032,7 +1133,14 @@ export default function VoiceAgent({
                 updateStatus('idle');
             }
 
-        } catch (err) {
+        } catch (err: any) {
+            // Ignore abort errors (user cancelled)
+            if (err?.name === 'AbortError') {
+                console.log('[Aeyes] Request cancelled by user');
+                updateStatus('idle');
+                processingRef.current = false;
+                return;
+            }
             console.error('[Aeyes] Process failed:', err);
             const errorMsg = err instanceof Error ? err.message : 'I encountered an error.';
 
@@ -1096,24 +1204,29 @@ export default function VoiceAgent({
 
     // Toggle pause/resume listening
     const handlePauseToggle = useCallback(async () => {
-        if (isPaused) {
-            // Resume listening
+        if (isPaused || isStandby) {
+            // Resume listening (or exit standby)
             await playUnmuteSound();
             setIsPaused(false);
+            setIsStandby(false);
+            isStandbyRef.current = false;
             stoppedManuallyRef.current = false;
-            // State update will trigger ref update, but for immediate logic we can assume false
             startListening();
             updateStatus('listening');
         } else {
-            // Pause listening AND stop speaking
+            // Stop everything: listening, speaking, AND processing
             await playMuteSound();
             setIsPaused(true);
+            setIsStandby(false);
+            isStandbyRef.current = false;
             stoppedManuallyRef.current = true; // Set manual stop flag to prevent race conditions
+            cancelRequests(); // Cancel any in-flight API requests
             stopAudio(); // Stop any current speech
             stopListening();
+            processingRef.current = false; // Reset processing flag
             updateStatus('idle');
         }
-    }, [isPaused, startListening, stopListening, stopAudio, updateStatus]);
+    }, [isPaused, isStandby, startListening, stopListening, stopAudio, cancelRequests, updateStatus]);
 
     if (!isSupported) {
         return <div className="error-text">Speech recognition not supported</div>;
@@ -1140,11 +1253,10 @@ export default function VoiceAgent({
             {!needsPermission && (
                 <button
                     onClick={handlePauseToggle}
-                    className={`btn-voice ${isPaused ? 'btn-voice-idle' : `btn-voice-${status}`}`}
-                    aria-label={isPaused ? 'Start listening' : 'Stop listening'}
-                    disabled={status === 'processing'}
+                    className={`btn-voice ${(isPaused || isStandby) ? 'btn-voice-idle' : `btn-voice-${status}`}`}
+                    aria-label={(isPaused || isStandby) ? 'Start listening' : status === 'processing' ? 'Stop processing' : 'Stop listening'}
                 >
-                    {isPaused ? (
+                    {(isPaused || isStandby) ? (
                         <MicIcon />
                     ) : status === 'processing' ? (
                         <div className="spinner-wrapper">
@@ -1154,7 +1266,7 @@ export default function VoiceAgent({
                     ) : (
                         <StopIcon />
                     )}
-                    <span>{isPaused ? 'Start' : status === 'processing' ? 'Processing...' : 'Stop'}</span>
+                    <span>{(isPaused || isStandby) ? 'Start' : status === 'processing' ? 'Processing...' : 'Stop'}</span>
                 </button>
             )}
 
@@ -1185,39 +1297,7 @@ export default function VoiceAgent({
                 <p className="error-text animate-fade-in">{error}</p>
             )}
 
-            {/* Debug Controls */}
-            <div style={{ marginTop: '20px', borderTop: '1px solid #333', paddingTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                <button
-                    className="kbd"
-                    style={{ cursor: 'pointer', background: '#333', color: '#fff', border: 'none', padding: '6px 10px' }}
-                    onClick={async () => {
-                        try {
-                            const res = await fetch('http://localhost:8000/health');
-                            const data = await res.json();
-                            alert('Backend Health: ' + JSON.stringify(data));
-                        } catch (e: any) {
-                            alert('Backend Error: ' + e.message);
-                        }
-                    }}
-                >
-                    Test Health
-                </button>
-                <button
-                    className="kbd"
-                    style={{ cursor: 'pointer', background: '#333', color: '#fff', border: 'none', padding: '6px 10px' }}
-                    onClick={async () => {
-                        try {
-                            const url = await getAudioUrl('Testing text to speech connection.');
-                            const audio = new Audio(url);
-                            audio.play();
-                        } catch (e: any) {
-                            alert('TTS Error: ' + e.message);
-                        }
-                    }}
-                >
-                    Test Speak
-                </button>
-            </div>
+
         </div>
     );
 }

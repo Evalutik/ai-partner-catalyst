@@ -80,7 +80,7 @@ body {
 .btn-voice-processing {
   background: var(--color-processing);
   color: #060606;
-  cursor: wait;
+  cursor: pointer;
   opacity: 0.9;
 }
 

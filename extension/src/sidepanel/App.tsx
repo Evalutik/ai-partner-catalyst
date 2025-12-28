@@ -5,13 +5,14 @@ import AnimatedMessage from './AnimatedMessage';
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
 
 interface Message {
-    type: 'user' | 'agent' | 'plan';
+    type: 'user' | 'agent';
     text: string;
 }
 
 export default function App() {
     const [status, setStatus] = useState<Status>('idle');
     const [messages, setMessages] = useState<Message[]>([]);
+    const [currentPlan, setCurrentPlan] = useState<string | null>(null); // Current active plan
     const [autoStarted, setAutoStarted] = useState(false);
     const messagesTopRef = useRef<HTMLDivElement>(null);
 
@@ -27,6 +28,7 @@ export default function App() {
             if (message.type === 'RELOAD_CONVERSATION') {
                 // Clear messages and reload VoiceAgent
                 setMessages([]);
+                setCurrentPlan(null);
                 setStreamingText('');
                 setAutoStarted(false);
                 setReloadKey(prev => prev + 1);
@@ -47,7 +49,12 @@ export default function App() {
     };
 
     const handlePlan = (text: string) => {
-        setMessages(prev => [...prev, { type: 'plan', text }]);
+        // Replace current plan (not append)
+        setCurrentPlan(text);
+    };
+
+    const handleClearPlan = () => {
+        setCurrentPlan(null);
     };
 
     const [permissionRequired, setPermissionRequired] = useState(false);
@@ -71,11 +78,70 @@ export default function App() {
                     onStreamingTranscript={setStreamingText}
                     onResponse={handleResponse}
                     onPlan={handlePlan}
+                    onClearPlan={handleClearPlan}
                     autoStart={!autoStarted}
                     onAutoStartComplete={() => setAutoStarted(true)}
                     status={status}
                     onPermissionRequired={setPermissionRequired}
                 />
+            </section>
+
+            {/* Current Plan Display (if any) */}
+            <section className="shrink-0" style={{ minHeight: currentPlan ? 'auto' : '0px' }}>
+                {currentPlan && (
+                    <div className="p-2 border border-[#1a1a1a] rounded-lg bg-[var(--color-bg-card)]">
+                        <div className="text-[10px] text-[var(--color-agent)] font-semibold mb-1.5">Plan</div>
+                        <div className="flex flex-col gap-1">
+                            {currentPlan.split('\n').map((line, i) => {
+                                const trimmedLine = line.trim();
+                                if (!trimmedLine) return null;
+
+                                // Determine step status
+                                const isCompleted = trimmedLine.startsWith('[x]');
+                                const isCurrent = trimmedLine.startsWith('[>]');
+                                const isPending = trimmedLine.startsWith('[ ]');
+
+                                // Remove the status marker from the text
+                                let stepText = trimmedLine;
+                                if (isCompleted || isCurrent || isPending) {
+                                    stepText = trimmedLine.slice(3).trim();
+                                }
+
+                                return (
+                                    <div key={i} className="flex items-center gap-2 text-xs">
+                                        {/* Icon based on status */}
+                                        {isCompleted && (
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--color-agent)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                                <polyline points="20 6 9 17 4 12" />
+                                            </svg>
+                                        )}
+                                        {isCurrent && (
+                                            <div className="w-3 h-3 border-2 border-[var(--color-processing)] border-t-transparent rounded-full animate-spin" />
+                                        )}
+                                        {isPending && (
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-muted)" strokeWidth="2">
+                                                <circle cx="12" cy="12" r="8" />
+                                            </svg>
+                                        )}
+                                        {!isCompleted && !isCurrent && !isPending && (
+                                            <span className="w-3" />
+                                        )}
+                                        {/* Step text */}
+                                        <span style={{
+                                            color: isCompleted ? 'var(--color-agent)' :
+                                                isCurrent ? 'var(--color-text-primary)' :
+                                                    'var(--color-text-muted)',
+                                            textDecoration: isCompleted ? 'line-through' : 'none',
+                                            opacity: isCompleted ? 0.7 : 1
+                                        }}>
+                                            {stepText}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
             </section>
 
             {/* Messages - NEW at top, OLD goes down */}
@@ -99,21 +165,17 @@ export default function App() {
                         {reversedMessages.map((msg, i) => (
                             <div
                                 key={messages.length - 1 - i}
-                                className={`message animate-fade-in ${msg.type === 'user' ? 'message-user' : msg.type === 'plan' ? 'message-plan' : 'message-agent'}`}
+                                className={`message animate-fade-in ${msg.type === 'user' ? 'message-user' : 'message-agent'}`}
                             >
                                 <div className="message-label">
-                                    {msg.type === 'user' ? 'You' : msg.type === 'plan' ? 'Plan' : 'Aeyes.'}
+                                    {msg.type === 'user' ? 'You' : 'Aeyes.'}
                                 </div>
-                                {msg.type === 'plan' ? (
-                                    <div className="message-text message-plan">{msg.text}</div>
-                                ) : (
-                                    <AnimatedMessage
-                                        text={msg.text}
-                                        isUser={msg.type === 'user'}
-                                        speed={msg.type === 'user' ? 80 : 250}
-                                        startVisible={msg.type === 'user'}
-                                    />
-                                )}
+                                <AnimatedMessage
+                                    text={msg.text}
+                                    isUser={msg.type === 'user'}
+                                    speed={msg.type === 'user' ? 80 : 250}
+                                    startVisible={msg.type === 'user'}
+                                />
                             </div>
                         ))}
                     </div>

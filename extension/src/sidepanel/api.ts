@@ -36,8 +36,9 @@ export interface ConversationResponse {
 
 /**
  * Send user transcript to backend, get response + optional actions
+ * @param signal - Optional AbortSignal to cancel the request
  */
-export async function sendToBackend(request: ConversationRequest): Promise<ConversationResponse> {
+export async function sendToBackend(request: ConversationRequest, signal?: AbortSignal): Promise<ConversationResponse> {
     const logPayload: any = { ...request };
     try {
         if (logPayload.context) {
@@ -45,7 +46,7 @@ export async function sendToBackend(request: ConversationRequest): Promise<Conve
         }
     } catch (e) { /* ignore parse error for logging */ }
 
-    console.log('[Aeyes Network] 📤 SENDING Payload:', JSON.stringify(logPayload, null, 2));
+    console.log('[Aeyes Network] 📤 SENDING Payload:', logPayload);
 
     const response = await fetch(`${BACKEND_URL}/conversation`, {
         method: 'POST',
@@ -53,6 +54,7 @@ export async function sendToBackend(request: ConversationRequest): Promise<Conve
             'Content-Type': 'application/json',
         },
         body: JSON.stringify(request),
+        signal,
     });
 
     if (!response.ok) {
@@ -60,20 +62,22 @@ export async function sendToBackend(request: ConversationRequest): Promise<Conve
     }
 
     const json = await response.json();
-    console.log('[Aeyes Network] 📥 RECEIVED Response:', JSON.stringify(json, null, 2));
+    console.log('[Aeyes Network] 📥 RECEIVED Response:', json);
     return json;
 }
 
 /**
  * Get TTS audio from backend (ElevenLabs via backend)
+ * @param signal - Optional AbortSignal to cancel the request
  */
-export async function getAudioUrl(text: string): Promise<string> {
+export async function getAudioUrl(text: string, signal?: AbortSignal): Promise<string> {
     const response = await fetch(`${BACKEND_URL}/speak`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({ text }),
+        signal,
     });
 
     if (!response.ok) {

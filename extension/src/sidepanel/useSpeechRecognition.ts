@@ -65,6 +65,8 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = 'en-US';
+        // @ts-ignore - maxAlternatives exists but not in all type definitions
+        recognition.maxAlternatives = 3; // Get top 3 alternatives for better accuracy
 
         recognition.onstart = () => {
             setIsListening(true);
