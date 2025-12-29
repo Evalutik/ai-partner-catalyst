@@ -2,7 +2,8 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { useSpeechRecognition } from './hooks/useSpeechRecognition';
 import { sendToBackend, getAudioUrl } from './services/api';
 import { playStartupSound, playListeningSound, playDoneSound, playMuteSound, playUnmuteSound } from './services/audioCues';
-import { extractDOMWithRetry, capturePageContext } from './services/chrome';
+import { extractDOMWithRetry, capturePageContext, openPermissionPage } from './services/chrome';
+import { playAudioAndWait, speakText } from './services/tts';
 import LockIcon from './components/LockIcon';
 import { MicIcon, StopIcon, StopIconSmall } from './components/icons';
 import { handleTabAction } from './tools/tabActions';
@@ -970,19 +971,6 @@ export default function VoiceAgent({
             processingRef.current = false;
         }
     }, [transcript, onTranscript, onResponse, updateStatus, executeActions, isPaused, abortListening, stopListening, startListening, conversationId]);
-
-
-    const openPermissionPage = useCallback(async () => {
-        // Get current active tab to return to it later
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        const returnTabId = tab?.id;
-
-        const url = returnTabId
-            ? chrome.runtime.getURL(`permission.html?returnTo=${returnTabId}`)
-            : chrome.runtime.getURL('permission.html');
-
-        chrome.tabs.create({ url });
-    }, []);
 
     const isActive = status !== 'idle';
 
