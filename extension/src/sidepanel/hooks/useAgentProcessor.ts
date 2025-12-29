@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useMemo } from 'react';
 import { SpeakerState } from './useSpeaker';
 import { AgentControlRefs, AgentLoopCallbacks } from './useAgentLoop';
 import { performPerception, performCognition, performActionExecution } from '../services/agentSteps';
+import { checkInfiniteLoop, detectPlanLoop, determineFinalResponse, LoopDetectionState } from './agentProcessorUtils';
 
 export function useAgentProcessor(
     speaker: SpeakerState,
@@ -53,8 +54,10 @@ export function useAgentProcessor(
 
         let stepCount = 0;
         let consecutiveFailures = 0;
-        let samePlanRepeatCount = 0;
-        let lastPlanText = lastPlanTextRef.current;
+        const loopState: LoopDetectionState = {
+            samePlanRepeatCount: 0,
+            lastPlanText: lastPlanTextRef.current
+        };
         let currentTranscript = capitalizedText;
         let finalResponseText = '';
         let currentConversationId = conversationId;
@@ -67,19 +70,11 @@ export function useAgentProcessor(
                 // 1. Perception
                 const perception = await performPerception();
 
-                // Safety check for loops without vision
-                if (stepCount > 1 && !perception.domContext && !perception.isProtected) {
-                    // We check if previous response had actions to be fair, but here we just check raw DOM presence
-                    // If we are deep in loop and lost DOM, that's bad.
-                    // But we can rely on performCognition to handle it potentially?
-                    // Original logic: if (stepCount > 1 && !loopDomContext && !response?.actions?.length)
-                    // Let's keep it simple: if no DOM and not protected, warn.
-                    if (!perception.domContext && !perception.isProtected) {
-                        console.warn('[Aeyes] Infinite loop risk: No DOM available.');
-                        // We continue, backend might handle it or we break next.
-                        finalResponseText = "I can't see the page content right now. Please ensure you're on a valid web page.";
-                        break;
-                    }
+                // Loop Safety Check
+                const loopWarning = checkInfiniteLoop(stepCount, perception);
+                if (loopWarning) {
+                    finalResponseText = loopWarning;
+                    break;
                 }
 
                 if (signal.aborted) break;
@@ -100,20 +95,11 @@ export function useAgentProcessor(
 
                 if (controls.stoppedManuallyRef.current) break;
 
-                // Loop Detection
-                const currentPlan = response.actions?.find((a: any) => a.type === 'notify_plan');
-                if (currentPlan) {
-                    const planText = currentPlan.value || currentPlan.args?.plan || '';
-                    if (planText === lastPlanText) {
-                        samePlanRepeatCount++;
-                        if (samePlanRepeatCount >= MAX_SAME_PLAN_REPEATS) {
-                            console.warn('[Aeyes] Plan loop detected, continuing caution...');
-                        }
-                    } else {
-                        samePlanRepeatCount = 1;
-                        lastPlanText = planText;
-                    }
-                }
+                // Plan Loop Detection
+                const newLoopState = detectPlanLoop(response.actions, loopState, MAX_SAME_PLAN_REPEATS);
+                // Update local state
+                loopState.samePlanRepeatCount = newLoopState.samePlanRepeatCount;
+                loopState.lastPlanText = newLoopState.lastPlanText;
 
                 // 3. Action Execution
                 let actionResult = { success: true } as any;
@@ -170,11 +156,7 @@ export function useAgentProcessor(
                 return;
             }
 
-            if (!finalResponseText) {
-                finalResponseText = stepCount >= MAX_TOTAL_STEPS
-                    ? "I'm sorry, the task was too complex. Please try breaking it down."
-                    : "Task completed.";
-            }
+            finalResponseText = determineFinalResponse(stepCount, MAX_TOTAL_STEPS, finalResponseText);
 
             // Speak Final Response
             await speaker.speak(finalResponseText, signal);
@@ -202,7 +184,7 @@ export function useAgentProcessor(
         } catch (err: any) {
             if (err?.name === 'AbortError') {
                 callbacks.onStatusChange('idle');
-                resetConversation(); // Clear plan
+                resetConversation();
                 setProcessingState(false);
                 return;
             }

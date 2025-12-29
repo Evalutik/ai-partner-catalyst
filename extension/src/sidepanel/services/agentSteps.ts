@@ -1,6 +1,6 @@
 import { sendToBackend } from './api';
-import { extractDOMWithRetry, capturePageContext } from '../tools/analysis';
-import { executeActions, ExecutionCallbacks, Action, ActionResult } from '../tools/actionExecutor';
+import { extractDOMWithRetry, capturePageContext } from '../lib/analysis';
+import { executeActions, ExecutionCallbacks, Action, ActionResult } from '../lib/actionExecutor';
 
 export interface PerceptionResult {
     domContext: any | null;
