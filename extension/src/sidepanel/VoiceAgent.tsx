@@ -1,8 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { useSpeechRecognition } from './useSpeechRecognition';
-import { sendToBackend, getAudioUrl } from './api';
-import { playStartupSound, playListeningSound, playDoneSound, playMuteSound, playUnmuteSound } from './audioCues';
-import LockIcon from './LockIcon';
+import { useSpeechRecognition } from './hooks/useSpeechRecognition';
+import { sendToBackend, getAudioUrl } from './services/api';
+import { playStartupSound, playListeningSound, playDoneSound, playMuteSound, playUnmuteSound } from './services/audioCues';
+import { extractDOMWithRetry, capturePageContext } from './services/chrome';
+import LockIcon from './components/LockIcon';
+import { MicIcon, StopIcon, StopIconSmall } from './components/icons';
+import { handleTabAction } from './tools/tabActions';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
 
@@ -420,148 +423,6 @@ export default function VoiceAgent({
         }
     }, [status]);
 
-    // Get DOM from current page via content script
-    const extractDOMFromPage = useCallback(async (): Promise<any | null> => {
-        try {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (!tab?.id) return null;
-
-            // Check if it's a restricted page where we can't inject
-            if (tab.url && (
-                tab.url.startsWith('chrome://') ||
-                tab.url.startsWith('edge://') ||
-                tab.url.startsWith('about:') ||
-                tab.url.startsWith('view-source:') ||
-                tab.url.includes('chrome.google.com/webstore')
-            )) {
-                console.log('[Aeyes] Skipping content script for restricted page:', tab.url);
-                return null;
-            }
-
-            try {
-                const response = await chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_DOM' });
-                if (response?.success && response?.data) {
-                    return response.data;
-                }
-                return null;
-            } catch (e: any) {
-                // Check if content script is unreachable
-                const isConnectionError = e.message && (
-                    e.message.includes('message port closed') ||
-                    e.message.includes('receiving end does not exist') ||
-                    e.message.includes('Could not establish connection')
-                );
-
-                if (isConnectionError) {
-                    console.log('[Aeyes] Content script not found, attempting to inject...');
-                    try {
-                        await chrome.scripting.executeScript({
-                            target: { tabId: tab.id },
-                            files: ['content.js']
-                        });
-                        console.log('[Aeyes] Content script injected successfully, retrying...');
-                        await new Promise(r => setTimeout(r, 300));
-
-                        // Retry the message
-                        const retryResponse = await chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_DOM' });
-                        if (retryResponse?.success && retryResponse?.data) {
-                            return retryResponse.data;
-                        }
-                    } catch (injectError: any) {
-                        console.warn('[Aeyes] Failed to inject content script:', injectError.message);
-                    }
-                }
-                return null;
-            }
-        } catch (e: any) {
-            console.warn('[Aeyes] extractDOMFromPage failed:', e.message);
-            return null;
-        }
-    }, []);
-
-    // DOM extraction with stricter null handling
-    const extractDOMWithRetry = useCallback(async (): Promise<any | null> => {
-        let attempts = 0;
-        while (attempts < 2) {
-            const dom = await extractDOMFromPage();
-            if (dom) return dom;
-            await new Promise(r => setTimeout(r, 500));
-            attempts++;
-        }
-        return null;
-    }, [extractDOMFromPage]);
-
-    // Capture page context (lightweight)
-    const capturePageContext = useCallback(async (): Promise<any | null> => {
-        try {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (!tab?.id) return null;
-
-            return {
-                url: tab.url || '',
-                title: tab.title || '',
-                width: tab.width || 0,
-                height: tab.height || 0,
-                tabId: tab.id
-            };
-        } catch (e) {
-            console.warn('[Aeyes] Failed to capture page context:', e);
-            return null;
-        }
-    }, []);
-
-    // Tab Management Actions
-    const handleTabAction = useCallback(async (action: any): Promise<{ success: boolean; message?: string }> => {
-        try {
-            console.log('[Aeyes] Handling Tab Action:', action.type, action);
-            if (action.type === 'open_tab' || (action.type === 'navigate' && action.newTab)) {
-                const url = action.value || 'about:blank';
-                await chrome.tabs.create({ url });
-                return { success: true, message: `Opened new tab: ${url}` };
-            }
-
-            if (action.type === 'close_tab') {
-                const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-                if (tab?.id) {
-                    await chrome.tabs.remove(tab.id);
-                    return { success: true, message: 'Closed current tab' };
-                }
-            }
-
-            if (action.type === 'switch_tab') {
-                // Simple logic: switch to next tab or specific index if provided (not implemented deep yet)
-                // For now, let's just query and switch to the "next" numerical ID or index? 
-                // Better: "switch_tab" usually implies satisfying a user request like "previous tab".
-                // Let's implement basic next/prev or relative switching if value is 'next'/'previous'.
-                const tabs = await chrome.tabs.query({ currentWindow: true });
-                const currentTab = tabs.find(t => t.active);
-                if (!currentTab) return { success: false, message: 'No active tab' };
-
-                let targetIndex = currentTab.index;
-                if (action.value === 'next') targetIndex = (currentTab.index + 1) % tabs.length;
-                else if (action.value === 'previous') targetIndex = (currentTab.index - 1 + tabs.length) % tabs.length;
-                // If ID provided
-                else if (action.tabId) {
-                    const target = tabs.find(t => t.id === action.tabId);
-                    if (target) {
-                        await chrome.tabs.update(target.id!, { active: true });
-                        return { success: true, message: `Switched to tab ${target.title}` };
-                    }
-                }
-
-                const targetTab = tabs.find(t => t.index === targetIndex);
-                if (targetTab?.id) {
-                    await chrome.tabs.update(targetTab.id, { active: true });
-                    return { success: true, message: `Switched to tab ${targetTab.title}` };
-                }
-            }
-
-            return { success: false, message: `Unknown tab action: ${action.type}` };
-        } catch (e) {
-            return { success: false, message: `Tab action failed: ${e}` };
-        }
-    }, []);
-
     // Execute actions on current page via content script with multi-step support
     // Returns execution result for adaptive error handling
     const executeActions = useCallback(async (actions: Array<{
@@ -878,7 +739,7 @@ export default function VoiceAgent({
                 failReason: `Unexpected error: ${error.message}`
             };
         }
-    }, [handleTabAction]);
+    }, []);
 
     const processTranscript = useCallback(async (text: string) => {
         if (processingRef.current) return;
@@ -1175,7 +1036,7 @@ export default function VoiceAgent({
         } finally {
             processingRef.current = false;
         }
-    }, [transcript, onTranscript, onResponse, updateStatus, extractDOMWithRetry, executeActions, isPaused, abortListening, stopListening, startListening, conversationId]);
+    }, [transcript, onTranscript, onResponse, updateStatus, executeActions, isPaused, abortListening, stopListening, startListening, conversationId]);
 
 
     const openPermissionPage = useCallback(async () => {
@@ -1299,31 +1160,5 @@ export default function VoiceAgent({
 
 
         </div>
-    );
-}
-
-function MicIcon() {
-    return (
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <line x1="12" x2="12" y1="19" y2="22" />
-        </svg>
-    );
-}
-
-function StopIcon() {
-    return (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="4" y="4" width="16" height="16" rx="2" />
-        </svg>
-    );
-}
-
-function StopIconSmall() {
-    return (
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" className="spinner-icon">
-            <rect x="4" y="4" width="16" height="16" rx="2" />
-        </svg>
     );
 }

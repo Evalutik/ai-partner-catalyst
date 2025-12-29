@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import VoiceAgent from './VoiceAgent';
-import AnimatedMessage from './AnimatedMessage';
+import AnimatedMessage from './components/AnimatedMessage';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
 
