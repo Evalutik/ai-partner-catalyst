@@ -144,45 +144,58 @@ Chrome popups close when the page navigates. For a blind user doing multi-step t
 
 ```
 ai-partner-catalyst/
-├── ARCHITECTURE.md           # This file - project documentation
+├── ARCHITECTURE.md           # Project documentation
 ├── README.md                 # Quick start guide
 ├── .gitignore                # Prevents committing secrets
 │
 ├── backend/                  # Python FastAPI Backend
-│   ├── main.py               # API endpoints: /conversation, /speak
+│   ├── main.py               # Minimal entry point
 │   ├── requirements.txt      # Python dependencies
-│   ├── .env.example          # Template (copy to .env)
-│   ├── .env                  # YOUR API keys (create from example)
-│   ├── service-account-key.json  # YOUR GCP credentials (download from console)
-│   └── venv/                 # Virtual environment (not committed)
+│   ├── app/                  # Application Package
+│   │   ├── __init__.py
+│   │   ├── main.py           # FastAPI app factory
+│   │   ├── config.py         # App configuration
+│   │   ├── models.py         # Pydantic models
+│   │   ├── api/              # API Endpoints
+│   │   │   ├── conversation.py
+│   │   │   ├── speech.py
+│   │   │   └── elements.py
+│   │   ├── core/             # Core Utilities
+│   │   │   ├── logging.py
+│   │   │   └── prompts.py
+│   │   └── services/         # Business Logic
+│   │       ├── conversation.py
+│   │       ├── gemini.py
+│   │       └── elevenlabs.py
+│   ├── tests/                # Test Suite
+│   │   ├── test_payload.py
+│   │   └── ...
+│   ├── .env.example          # Template
+│   ├── .env                  # Secrets (gitignored)
+│   └── service-account-key.json
 │
 ├── extension/                # Chrome Extension (Manifest V3)
 │   ├── public/
-│   │   ├── manifest.json     # Extension config: permissions, hotkey, sidePanel
-│   │   ├── sidepanel.html    # Side Panel HTML entry point
-│   │   ├── permission.html   # Microphone permission request page
-│   │   └── permission.js     # Permission request logic
+│   │   ├── manifest.json
+│   │   ├── sidepanel.html
+│   │   ├── permission.html
+│   │   └── permission.js
 │   ├── src/
 │   │   ├── background/
-│   │   │   └── index.ts      # Service worker: opens Side Panel on Alt+V
+│   │   │   └── index.ts      # Service worker
 │   │   ├── content/
-│   │   │   └── index.ts      # Injected into pages: DOM extraction, actions
+│   │   │   └── index.ts      # DOM extraction
 │   │   └── sidepanel/
-│   │       ├── index.tsx     # React entry point
-│   │       ├── App.tsx       # Main UI container with message history
-│   │       ├── VoiceAgent.tsx # Voice UI with audio visualizer
-│   │       ├── useSpeechRecognition.ts # Web Speech API hook
-│   │       ├── api.ts        # Backend API calls
-│   │       └── index.css     # Styles (dark theme, Inter font)
-│   ├── .env.example          # Template (copy to .env)
-│   ├── .env                  # Backend URL config (optional)
-│   ├── dist/                 # Build output - load this in Chrome
-│   ├── package.json
-│   ├── vite.config.ts
-│   └── tsconfig.json
-│
-└── docs/
-    └── assets/               # Screenshots, diagrams
+│   │       ├── index.tsx
+│   │       ├── App.tsx
+│   │       ├── VoiceAgent.tsx
+│   │       ├── useSpeechRecognition.ts
+│   │       ├── api.ts
+│   │       └── index.css
+│   ├── .env.example
+│   ├── .env
+│   ├── dist/
+│   └── package.json
 ```
 
 **Environment Files (Gitignored):**
