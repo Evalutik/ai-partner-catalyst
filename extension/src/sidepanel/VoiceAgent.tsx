@@ -1,17 +1,17 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useSpeechRecognition } from './hooks/useSpeechRecognition';
-import { playStartupSound, playListeningSound, playDoneSound, playMuteSound, playUnmuteSound, resumeAudioContext } from './services/audioCues';
-// import { openPermissionPage } from './services/chrome'; // Removed: Handled by PermissionCard
-import VoiceVisualizer from './components/VoiceVisualizer';
-import VoiceControl from './components/VoiceControl';
-import PermissionCard from './components/PermissionCard';
 import { useAudioVisualization } from './hooks/useAudioVisualization';
-import { capitalizeFirst } from './services/echoFilter';
 import { useSpeaker } from './hooks/useSpeaker';
 import { useAgentLoop } from './hooks/useAgentLoop';
 import { useVoiceActivity } from './hooks/useVoiceActivity';
-
-type Status = 'idle' | 'listening' | 'processing' | 'speaking';
+import { useAgentPermissions } from './hooks/useAgentPermissions';
+import { useAgentGreeting } from './hooks/useAgentGreeting';
+import { useAgentControls } from './hooks/useAgentControls';
+import { capitalizeFirst } from './services/echoFilter';
+import VoiceVisualizer from './components/VoiceVisualizer';
+import VoiceControl from './components/VoiceControl';
+import PermissionCard from './components/PermissionCard';
+import { Status } from './types';
 
 interface VoiceAgentProps {
     onStatusChange?: (status: Status) => void;
@@ -37,22 +37,27 @@ export default function VoiceAgent({
     onPlan,
     onClearPlan
 }: VoiceAgentProps) {
+    // Local UI State
     const [error, setError] = useState<string | null>(null);
-    const [hasAttemptedAutoStart, setHasAttemptedAutoStart] = useState(false);
-    const [hasGreeted, setHasGreeted] = useState(false);
-    const [isPaused, setIsPaused] = useState(false);
-    const [needsPermission, setNeedsPermission] = useState(false);
 
-    // Refs for control logic
-    const statusRef = useRef(status);
+    // Control State (Lifted for Hook Coordination)
+    const [isPaused, setIsPaused] = useState(false);
     const isPausedRef = useRef(isPaused);
     const stoppedManuallyRef = useRef(false);
-    const hasGreetedRef = useRef(false);
-    const transcriptRef = useRef<string>('');
+
+    // Sync refs
+    useEffect(() => {
+        isPausedRef.current = isPaused;
+        if (!isPaused) stoppedManuallyRef.current = false;
+    }, [isPaused]);
 
     // 1. Audio Visualization
+    // Callback proxy to update permissions if visualization fails
     const onVisPermission = useCallback((required: boolean) => {
-        setNeedsPermission(required);
+        // We can't directly set "needsPermission" here as it's controlled by useAgentPermissions
+        // But useAgentPermissions gives us the state. 
+        // Actually, internal logic in useAudioVisualization calls this if getUserMedia fails.
+        // We should notify parent.
         onPermissionRequired?.(required);
     }, [onPermissionRequired]);
 
@@ -75,26 +80,12 @@ export default function VoiceAgent({
         resetTranscript
     } = useSpeechRecognition();
 
-    // Sync refs for robust loops
-    useEffect(() => {
-        transcriptRef.current = transcript;
-    }, [transcript]);
-
-    useEffect(() => {
-        statusRef.current = status;
-    }, [status]);
-
-    useEffect(() => {
-        isPausedRef.current = isPaused;
-        if (!isPaused) stoppedManuallyRef.current = false;
-    }, [isPaused]);
-
+    // 3. Status Helper
     const updateStatus = useCallback((newStatus: Status) => {
         onStatusChange?.(newStatus);
     }, [onStatusChange]);
 
-    // 3. Output Speaker (TTS)
-    // Memoize callbacks to prevent stable reference changes
+    // 4. Output Speaker
     const speakerCallbacks = useMemo(() => ({
         onStatusChange: updateStatus,
         onResponse
@@ -102,15 +93,7 @@ export default function VoiceAgent({
 
     const speaker = useSpeaker(speakerCallbacks);
 
-    // 4. Core Agent Loop (Brain)
-
-    // Memoize controls to prevent recreating the object on every render (which triggers useAgentLoop update)
-    const agentControls = useMemo(() => ({
-        isPausedRef,
-        stoppedManuallyRef
-    }), []);
-
-    // Memoize callbacks for the same reason
+    // 5. Agent Loop (Brain)
     const agentCallbacks = useMemo(() => ({
         onStatusChange: updateStatus,
         onTranscript: onTranscript || (() => { }),
@@ -123,34 +106,65 @@ export default function VoiceAgent({
         startAudioVisualization
     }), [updateStatus, onTranscript, onResponse, onPlan, onClearPlan, startListening, stopListening, abortListening, startAudioVisualization]);
 
+    const agentControlsRefs = useMemo(() => ({
+        isPausedRef,
+        stoppedManuallyRef
+    }), []);
+
+    // We pass the refs to agent loop so it can check paused state during async operations
     const agentLoop = useAgentLoop(
         speaker,
         agentCallbacks,
-        agentControls
+        agentControlsRefs
     );
 
-    // Sync refs
-    useEffect(() => { statusRef.current = status; }, [status]);
-    useEffect(() => {
-        isPausedRef.current = isPaused;
-        if (!isPaused) stoppedManuallyRef.current = false;
-    }, [isPaused]);
+    // 6. Agent Controls (Pause/Resume logic)
+    const { handlePauseToggle } = useAgentControls({
+        agentLoop,
+        speaker,
+        startListening,
+        stopListening,
+        resetTranscript,
+        updateStatus,
+        isPaused,
+        setIsPaused,
+        stoppedManuallyRef
+    });
+
+    // 7. Greeting Logic
+    const { playGreeting } = useAgentGreeting({
+        speaker,
+        startListening,
+        startAudioVisualization,
+        stopAudioVisualization,
+        updateStatus,
+        autoStart,
+        isSupported,
+        stoppedManuallyRef
+    });
+
+    // 8. Permission Management
+    const onPermissionUpdate = useCallback((isDenied: boolean) => {
+        onPermissionRequired?.(isDenied);
+        // Retry greeting if permission becomes available and we haven't greeted yet
+        if (!isDenied) {
+            playGreeting();
+        }
+    }, [onPermissionRequired, playGreeting]);
+
+    const { needsPermission } = useAgentPermissions(onPermissionUpdate);
+
 
     // Error Handling
     useEffect(() => {
         if (speechError) {
             console.log('[VoiceAgent] Speech error:', speechError);
             if (speechError.includes('permission denied') || speechError.includes('not-allowed')) {
-                setNeedsPermission(true);
                 onPermissionRequired?.(true);
             }
-            // For 'no-speech', we generally don't show error to user, just restart via Watchdog.
-            // But if it's persistent...
             if (speechError !== 'no-speech') {
                 setError(speechError);
             }
-
-            // Only go idle if it's a critical error
             if (speechError.includes('permission') || speechError.includes('not-allowed') || speechError.includes('audio-capture')) {
                 updateStatus('idle');
             }
@@ -161,79 +175,18 @@ export default function VoiceAgent({
     useEffect(() => {
         return () => {
             stopAudioVisualization();
-        };
-    }, [stopAudioVisualization]);
-
-    useEffect(() => {
-        return () => {
             speaker.stopAudio();
         };
-    }, [speaker]);
-
-    // Greeting Logic
-    const playGreeting = useCallback(async () => {
-        if (hasGreetedRef.current) return;
-        hasGreetedRef.current = true;
-        setHasGreeted(true);
-
-        try {
-            await resumeAudioContext(); // Ensure audio is ready
-            await playStartupSound();
-
-            // Check before speaking
-            if (stoppedManuallyRef.current) return;
-
-            await speaker.speak("Hi, I'm Aeyes. How can I help you?");
-
-            // Check if user stopped while speaking
-            if (stoppedManuallyRef.current) return;
-
-            await playDoneSound();
-
-            // Critical check: don't start listening if user pressed stop during greeting
-            if (stoppedManuallyRef.current) return;
-
-            const success = await startAudioVisualization();
-
-            // Re-check after async startVisualization (though it should be fast)
-            if (stoppedManuallyRef.current) {
-                stopAudioVisualization();
-                updateStatus('idle');
-                return;
-            }
-
-            if (success) {
-                await playListeningSound();
-                updateStatus('listening');
-                startListening();
-            } else {
-                updateStatus('idle');
-            }
-        } catch (e) {
-            updateStatus('idle');
-        }
-    }, [hasGreeted, updateStatus, startListening, startAudioVisualization, stopAudioVisualization, speaker]);
-
-    // Auto-start
-    useEffect(() => {
-        if (autoStart && !hasAttemptedAutoStart && isSupported) {
-            setHasAttemptedAutoStart(true);
-            setTimeout(() => playGreeting(), 500);
-        }
-    }, [autoStart, hasAttemptedAutoStart, isSupported, playGreeting]);
+    }, [stopAudioVisualization, speaker]);
 
     // Streaming Transcript Update
     useEffect(() => {
-        // Guard: Don't listen if processing or speaking
         if (status === 'processing' || status === 'speaking' || agentLoop.processing || speaker.speakingRef.current) return;
-
         const fullCurrentText = (transcript + interimTranscript).trim();
-
         onStreamingTranscript?.(fullCurrentText ? capitalizeFirst(fullCurrentText) : '');
     }, [transcript, interimTranscript, onStreamingTranscript, status, agentLoop, speaker]);
 
-
-    // 5. Voice Activity Management (Silence Detection + Watchdog)
+    // Voice Activity Management
     useVoiceActivity({
         status,
         isListening,
@@ -247,64 +200,18 @@ export default function VoiceAgent({
         onRestartListening: startListening
     });
 
-    // Permission Check
-    useEffect(() => {
-        navigator.permissions.query({ name: 'microphone' as PermissionName }).then((permissionStatus) => {
-            const check = () => {
-                const denied = permissionStatus.state === 'denied';
-                setNeedsPermission(denied);
-                onPermissionRequired?.(denied);
-                if (!denied && !hasGreetedRef.current) playGreeting();
-            };
-            check();
-            permissionStatus.onchange = check;
-        });
-    }, [onPermissionRequired, hasGreeted, playGreeting]);
-
-    const handlePauseToggle = useCallback(async () => {
-        const isCurrentlyInactive = isPaused || agentLoop.isStandby;
-
-        if (isCurrentlyInactive) {
-            // Resume
-            // For start, we can play sound first as feedback
-            await resumeAudioContext(); // Resuming
-            await playUnmuteSound();
-            setIsPaused(false);
-            agentLoop.setStandby(false);
-            stoppedManuallyRef.current = false;
-            startListening();
-            updateStatus('listening');
-        } else {
-            // Pause/Stop - EXECUTE INSTANTLY
-            stoppedManuallyRef.current = true;
-            setIsPaused(true);
-            agentLoop.setStandby(false);
-
-            agentLoop.cancelRequests();
-            speaker.stopAudio();
-            stopListening();
-            resetTranscript(); // Clear residual text to prevent echo processing
-            updateStatus('idle');
-
-            // Feedback sound last (or parallel, but don't block state)
-            playMuteSound();
-        }
-    }, [isPaused, agentLoop, startListening, stopListening, speaker, updateStatus]);
-
     if (!isSupported) return <div className="error-text">Speech recognition not supported</div>;
 
     const isIdleMode = isPaused || agentLoop.isStandby;
 
     return (
         <div className="flex flex-col gap-3">
-            {/* Audio Visualizer */}
             <VoiceVisualizer
                 audioLevel={audioLevel}
                 status={status}
                 isPaused={isPaused}
             />
 
-            {/* Toggle Button */}
             {!needsPermission && (
                 <VoiceControl
                     status={status}
@@ -313,16 +220,13 @@ export default function VoiceAgent({
                 />
             )}
 
-            {/* Permission Card */}
             {needsPermission && (
                 <PermissionCard />
             )}
 
-            {/* Error Display */}
             {error && !needsPermission && (
                 <p className="error-text animate-fade-in">{error}</p>
             )}
         </div>
     );
 }
-
