@@ -1,36 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-
-// Web Speech API types (Chrome-specific)
-interface SpeechRecognitionEvent extends Event {
-    results: SpeechRecognitionResultList;
-    resultIndex: number;
-}
-
-interface SpeechRecognitionErrorEvent extends Event {
-    error: string;
-    message: string;
-}
-
-type SpeechRecognition = {
-    continuous: boolean;
-    interimResults: boolean;
-    lang: string;
-    start: () => void;
-    stop: () => void;
-    abort: () => void;
-    onresult: (event: SpeechRecognitionEvent) => void;
-    onerror: (event: SpeechRecognitionErrorEvent) => void;
-    onend: () => void;
-    onstart: () => void;
-};
-
-declare global {
-    interface Window {
-        webkitSpeechRecognition: new () => SpeechRecognition;
-        SpeechRecognition: new () => SpeechRecognition;
-        find: (text: string) => boolean; // Add find method
-    }
-}
+import { SpeechEngine } from '../services/SpeechEngine';
 
 export interface UseSpeechRecognitionResult {
     isListening: boolean;
@@ -49,172 +18,56 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
     const [interimTranscript, setInterimTranscript] = useState('');
     const [error, setError] = useState<string | null>(null);
 
-    const isAbortedRef = useRef(false);
-    const recognitionRef = useRef<SpeechRecognition | null>(null);
-    const shouldAutoRestartRef = useRef(true);  // Controls auto-restart behavior
+    const engineRef = useRef<SpeechEngine | null>(null);
     const isSupported = typeof window !== 'undefined' &&
         ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window);
 
-    // Initialize speech recognition
     useEffect(() => {
         if (!isSupported) return;
 
-        const SpeechRecognitionClass = window.webkitSpeechRecognition || window.SpeechRecognition;
-        const recognition = new SpeechRecognitionClass();
-
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = 'en-US';
-        // @ts-ignore - maxAlternatives exists but not in all type definitions
-        recognition.maxAlternatives = 3; // Get top 3 alternatives for better accuracy
-
-        recognition.onstart = () => {
-            console.log('[Speech] onstart');
-            setIsListening(true);
-            setTranscript('');
-            setInterimTranscript('');
-            setError(null);
-        };
-
-        recognition.onresult = (event: SpeechRecognitionEvent) => {
-            if (isAbortedRef.current) return;
-
-            // console.log('[Speech] onresult event fired');
-
-            let interim = '';
-            let final = '';
-
-            for (let i = event.resultIndex; i < event.results.length; i++) {
-                const result = event.results[i];
-                if (result.isFinal) {
-                    final += result[0].transcript;
-                    console.log('[Speech] Final result:', result[0].transcript);
+        engineRef.current = new SpeechEngine({
+            onStart: () => {
+                setIsListening(true);
+                setTranscript('');
+                setInterimTranscript('');
+                setError(null);
+            },
+            onResult: (text, isFinal) => {
+                if (isFinal) {
+                    setTranscript(prev => prev + text);
+                    setInterimTranscript('');
                 } else {
-                    interim += result[0].transcript;
+                    setInterimTranscript(text);
                 }
+            },
+            onError: (err) => {
+                console.error('[UseSpeech] Error:', err);
+                // Filter out purely informational errors if desired, but Engine handles most
+                if (err !== 'no-speech') {
+                    setError(err);
+                }
+                setIsListening(false);
+            },
+            onEnd: () => {
+                setIsListening(false);
             }
-
-            if (final) {
-                setTranscript(prev => prev + final);
-            }
-            // if (interim) {
-            //     console.log('[Speech] Interim:', interim);
-            // }
-            setInterimTranscript(interim);
-        };
-
-        recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-            if (event.error === 'aborted') return; // Ignore aborted "errors" completely
-
-            console.error('[Speech] Error:', event.error); // Log all errors
-
-            // Handle specific errors
-            switch (event.error) {
-                case 'not-allowed':
-                    setError('Microphone permission denied. Please allow microphone access.');
-                    break;
-                case 'no-speech':
-                    // Not an error, just no speech detected - restart silently
-                    console.log('[Speech] no-speech detected');
-                    return;
-                case 'audio-capture':
-                    setError('No microphone found. Please connect a microphone.');
-                    break;
-                case 'network':
-                    setError('Network error. Please check your connection.');
-                    break;
-                case 'aborted':
-                    // Expected when we abort
-                    return;
-                default:
-                    setError(`Speech recognition error: ${event.error}`);
-            }
-
-            setIsListening(false);
-        };
-
-        recognition.onend = () => {
-            console.log('[Speech] onend');
-            setIsListening(false);
-            // Auto-restart only if allowed (not manually stopped/aborted) and no error
-            if (recognitionRef.current && shouldAutoRestartRef.current && !error && !isAbortedRef.current) {
-                // Restart after brief pause
-                console.log('[Speech] Auto-restarting...');
-                setTimeout(() => {
-                    try {
-                        if (!isAbortedRef.current) {
-                            recognitionRef.current?.start();
-                        }
-                    } catch {
-                        // Already started, ignore
-                    }
-                }, 100);
-            }
-        };
-
-        recognitionRef.current = recognition;
+        });
 
         return () => {
-            recognition.abort();
+            engineRef.current?.abort();
         };
     }, [isSupported]);
 
     const start = useCallback(() => {
-        console.log('[Speech] start() called');
-        if (!recognitionRef.current) return;
-        // Don't start if already listening
-        if (isListening) {
-            console.log('[Speech] Already listening');
-            return;
-        }
-
-        // Enable auto-restart when user starts listening
-        shouldAutoRestartRef.current = true;
-        isAbortedRef.current = false; // Reset abort flag
-
-        setTranscript('');
-        setInterimTranscript('');
-        setError(null);
-
-        try {
-            recognitionRef.current.start();
-        } catch (e) {
-            console.warn('[Speech] Start failed (probably already active/stopping):', e);
-            // If it failed because it's already started, that's fine.
-            // If it failed because it's stopping, the onend handler will see shouldAutoRestartRef=true and restart it.
-        }
-    }, [isListening]);
+        engineRef.current?.start();
+    }, []);
 
     const stop = useCallback(() => {
-        console.log('[Speech] stop() called');
-        if (!recognitionRef.current) return;
-
-        // Disable auto-restart when user explicitly stops
-        shouldAutoRestartRef.current = false;
-
-        try {
-            recognitionRef.current.stop();
-        } catch {
-            // Already stopped
-        }
-        setIsListening(false);
-        setTranscript(''); // Explicitly clear
-        setInterimTranscript('');
+        engineRef.current?.stop();
     }, []);
 
     const abort = useCallback(() => {
-        console.log('[Speech] abort() called');
-        if (!recognitionRef.current) return;
-        shouldAutoRestartRef.current = false;
-        isAbortedRef.current = true; // Set flag to drop all pending results
-        try {
-            recognitionRef.current.abort();
-        } catch {
-            // Already stopped
-        }
-        setIsListening(false);
-        setTranscript(''); // Explicitly clear
-        setInterimTranscript('');
+        engineRef.current?.abort();
     }, []);
 
     return {
@@ -228,3 +81,4 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         abort,
     };
 }
+
