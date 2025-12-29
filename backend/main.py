@@ -61,6 +61,17 @@ When user asks you to do something, break it into steps and return JSON with thi
   "requiresFollowUp": false
 }
 
+DOM STRUCTURE:
+The page DOM is provided in CLUSTERED format for efficiency:
+- viewport_summary: High-level page description
+- clusters: Elements grouped by semantic purpose (navigation, forms, actions, content, media)
+- critical_elements: Priority interactive elements (search boxes, primary buttons)
+
+Each cluster contains:
+- count: Total elements in category
+- summary: Text overview
+- items: Array of {id, label, type} - use the "id" for actions
+
 ACTION TYPES:
 1. navigate - Go to URL: {"type": "navigate", "value": "https://url.com", "waitForPage": true, "newTab": true}
    - Use "newTab": true (default) when user says "open", "open in new tab", etc.
@@ -74,32 +85,45 @@ ACTION TYPES:
    - Use this when you can't see the element you need in the current view.
 6. read - Read full text: {"type": "read", "elementId": "el-123"}
 
-NOTE: ALWAYS PREFER "elementId" if the element is in the `elements` list.
-Only use "description" + "needsDom: true" if the element is NOT in the list.
+FINDING ELEMENTS:
+1. Check critical_elements first (contains high-priority interactive elements)
+2. Then check relevant cluster:
+   - Need to type? → Look in "forms" cluster
+   - Need to click button? → Look in "actions" cluster
+   - Need to navigate? → Look in "navigation" cluster
+   - Need content info? → Look in "content" cluster
+3. ALWAYS use the element's "id" field (e.g., "el-123") when creating actions
+4. Only use "description" + "needsDom: true" if the element is NOT in any cluster
 
-EXAMPLES:
+EXAMPLES WITH CLUSTERED DOM:
 
-User: "Find the price of the Sony camera"
+Example 1 - Using critical_elements:
+User: "Search for headphones"
+DOM has: critical_elements: [{id: "el-5", tagName: "input", role: "searchbox", placeholder: "Search"}]
+        clusters.actions.items: [{id: "el-12", label: "Search", type: "button"}]
 YOU MUST RETURN:
 {
-  "response": "Searching for the price...",
+  "response": "Searching for headphones...",
   "actions": [
-    {"type": "search", "value": "Price"}
-  ],
-  "requiresFollowUp": true
-}
-
-User: "Read the first paragraph"
-(Assuming el-10 text is truncated)
-YOU MUST RETURN:
-{
-  "response": "Reading the full paragraph for you...",
-  "actions": [
-    {"type": "read", "elementId": "el-10"}
+    {"type": "type", "elementId": "el-5", "value": "headphones"},
+    {"type": "click", "elementId": "el-12", "description": "Search"}
   ],
   "requiresFollowUp": false
 }
 
+Example 2 - Using clusters:
+User: "Click the first product"
+DOM has: clusters.content.items: [{id: "el-20", label: "Sony Headphones - $50", type: "a"}, ...]
+YOU MUST RETURN:
+{
+  "response": "Opening the Sony Headphones...",
+  "actions": [
+    {"type": "click", "elementId": "el-20", "description": "Sony Headphones"}
+  ],
+  "requiresFollowUp": false
+}
+
+Example 3 - Element not in clusters (use description):
 User: "Go to YouTube and search for cats"
 YOU MUST RETURN:
 {
@@ -239,17 +263,21 @@ async def conversation(request: ConversationRequest):
             prompt = f"""User request: "{user_text}"
 {additional_context}
 {history_text}
-Current page DOM (interactive elements):
+Current page DOM (CLUSTERED format for efficiency):
 {context_str}
 
-Analyze the request and DOM, then respond with JSON.
+Analyze the request and clustered DOM, then respond with JSON.
 CRITICAL: If the user request is "[Continue...]", you MUST use the PENDING GOAL to determine your next action.
-- DOM ACTION PRIORITY: Scan `elements` list. If you find a matching element (e.g. video title containing "music"), YOU MUST USE ITS `elementId` (e.g. "el-302").
-- NO DESCRIPTION: Do NOT use "description" if you have the `elementId`. Using `elementId` is instant and reliable. Only use "description" if you are guessing.
-- FUZZY MATCHING: If the user asks for "any [X]", click ANY valid link that contains [X] in its text or label.
-- NO BLIND SCROLLING: Do not scroll if a viable candidate is ALREADY in the `elements` list.
-- If you see the information needed to answer the user, provide the ANSWER in the "response" field and set requiresFollowUp: false.
-- If you need to find text that isn't visible, return a "search" action.
+
+WORKING WITH CLUSTERED DOM:
+- Check critical_elements FIRST for high-priority interactive elements (search boxes, primary buttons)
+- Then look in relevant clusters: forms (inputs), actions (buttons), navigation (menus), content (text/links)
+- ALWAYS use the element's "id" field from clusters/critical_elements
+- NO DESCRIPTION: Do NOT use "description" if you have the element ID. Only use "description" + needsDom if element is NOT in clusters.
+- FUZZY MATCHING: If user asks for "any [X]", find ANY item in clusters where label contains [X]
+- NO BLIND SCROLLING: Do not scroll if a viable candidate is in the clusters
+- If you see the information needed to answer the user, provide the ANSWER in the "response" field and set requiresFollowUp: false
+- If you need to find text that isn't visible, return a "search" action
 - DO NOT just say "I am analyzing". TAKE ACTION or ANSWER."""
         else:
             prompt = f"""User request: "{user_text}"
@@ -384,6 +412,12 @@ Respond with JSON."""
             )
 
     except Exception as e:
+        # Log the actual error for debugging
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"[AEYES ERROR] Exception in conversation endpoint:")
+        print(error_details)
+
         fallback_msg = "I had a problem processing that. Please try again."
 
         # Add to history
