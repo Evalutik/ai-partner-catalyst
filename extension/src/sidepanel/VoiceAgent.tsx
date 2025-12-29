@@ -6,6 +6,8 @@ import { extractDOMWithRetry, capturePageContext } from './services/chrome';
 import LockIcon from './components/LockIcon';
 import { MicIcon, StopIcon, StopIconSmall } from './components/icons';
 import { handleTabAction } from './tools/tabActions';
+import { useAudioVisualization } from './hooks/useAudioVisualization';
+import { checkForWakeWord } from './services/wakeWord';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
 
@@ -35,13 +37,22 @@ export default function VoiceAgent({
     onClearPlan
 }: VoiceAgentProps) {
     const [error, setError] = useState<string | null>(null);
-    const [audioLevel, setAudioLevel] = useState<number[]>(new Array(16).fill(0));
-    const [needsPermission, setNeedsPermission] = useState(false);
     const [hasAttemptedAutoStart, setHasAttemptedAutoStart] = useState(false);
     const [conversationId, setConversationId] = useState<string | null>(null);
     const [hasGreeted, setHasGreeted] = useState(false);
     const [isPaused, setIsPaused] = useState(false); // Listening paused by user
     const [isStandby, setIsStandby] = useState(false); // Wake word listening mode
+    const [needsPermission, setNeedsPermission] = useState(false);
+
+    // Audio visualization hook
+    const {
+        audioLevel,
+        startVisualization: startAudioVisualization,
+        stopVisualization: stopAudioVisualization
+    } = useAudioVisualization((required) => {
+        setNeedsPermission(required);
+        onPermissionRequired?.(required);
+    });
 
     // Refs for audio and processing state
     const statusRef = useRef(status);
@@ -52,10 +63,6 @@ export default function VoiceAgent({
     const lastSpokenTextRef = useRef<string>(''); // For echo cancellation
     const lastShownPlanRef = useRef<string>(''); // For plan deduplication
     const silenceTimeoutRef = useRef<number | null>(null);
-    const audioContextRef = useRef<AudioContext | null>(null);
-    const analyserRef = useRef<AnalyserNode | null>(null);
-    const animationFrameRef = useRef<number | null>(null);
-    const streamRef = useRef<MediaStream | null>(null);
     const abortControllerRef = useRef<AbortController | null>(null); // For cancelling in-flight requests
     const isStandbyRef = useRef(false); // Sync ref for standby mode
 
@@ -90,73 +97,6 @@ export default function VoiceAgent({
             updateStatus('idle');
         }
     }, [speechError, updateStatus, onPermissionRequired]);
-
-    const startAudioVisualization = useCallback(async () => {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            streamRef.current = stream;
-
-            const audioContext = new AudioContext();
-            const analyser = audioContext.createAnalyser();
-            analyser.fftSize = 64;
-
-            const source = audioContext.createMediaStreamSource(stream);
-            source.connect(analyser);
-
-            audioContextRef.current = audioContext;
-            analyserRef.current = analyser;
-
-            const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-            const updateLevels = () => {
-                if (!analyserRef.current) return;
-
-                analyserRef.current.getByteFrequencyData(dataArray);
-
-                const levels: number[] = [];
-                const bandSize = Math.floor(dataArray.length / 16);
-                for (let i = 0; i < 16; i++) {
-                    const start = i * bandSize;
-                    let sum = 0;
-                    for (let j = 0; j < bandSize; j++) {
-                        sum += dataArray[start + j];
-                    }
-                    const avg = sum / bandSize / 255;
-                    levels.push(Math.max(0.15, Math.pow(avg, 0.7)));
-                }
-
-                setAudioLevel(levels);
-                animationFrameRef.current = requestAnimationFrame(updateLevels);
-            };
-
-            updateLevels();
-            setNeedsPermission(false);
-            onPermissionRequired?.(false);
-            setError(null);
-            return true;
-        } catch {
-            setNeedsPermission(true);
-            onPermissionRequired?.(true);
-            return false;
-        }
-    }, [onPermissionRequired]);
-
-    const stopAudioVisualization = useCallback(() => {
-        if (animationFrameRef.current) {
-            cancelAnimationFrame(animationFrameRef.current);
-            animationFrameRef.current = null;
-        }
-        if (audioContextRef.current) {
-            audioContextRef.current.close();
-            audioContextRef.current = null;
-        }
-        if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop());
-            streamRef.current = null;
-        }
-        analyserRef.current = null;
-        setAudioLevel(new Array(16).fill(0));
-    }, []);
 
     // Stop any playing audio
     const stopAudio = useCallback(() => {
@@ -244,13 +184,6 @@ export default function VoiceAgent({
             stopAudio();
         };
     }, [stopAudioVisualization, stopAudio]);
-
-    // Wake word detection helper
-    const checkForWakeWord = useCallback((text: string): boolean => {
-        const normalizedText = text.toLowerCase().trim();
-        const wakeWords = ['aeyes', 'a eyes', 'eyes', 'hey eyes', 'hey aeyes', 'hi eyes', 'hi aeyes'];
-        return wakeWords.some(word => normalizedText.includes(word));
-    }, []);
 
     // Handle wake word activation
     const activateFromStandby = useCallback(async () => {
