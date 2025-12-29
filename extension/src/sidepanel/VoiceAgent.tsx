@@ -3,10 +3,10 @@ import { useSpeechRecognition } from './hooks/useSpeechRecognition';
 import { sendToBackend, getAudioUrl } from './services/api';
 import { playStartupSound, playListeningSound, playDoneSound, playMuteSound, playUnmuteSound } from './services/audioCues';
 import { extractDOMWithRetry, capturePageContext, openPermissionPage } from './services/chrome';
-import { playAudioAndWait, speakText } from './services/tts';
 import LockIcon from './components/LockIcon';
 import { MicIcon, StopIcon, StopIconSmall } from './components/icons';
 import { handleTabAction } from './tools/tabActions';
+import { handleNavigateAction, handleGoBackAction, handleReloadAction, isRestrictedPage, SAFE_ACTIONS_ON_RESTRICTED } from './tools/navigationActions';
 import { useAudioVisualization } from './hooks/useAudioVisualization';
 import { checkForWakeWord } from './services/wakeWord';
 
@@ -387,16 +387,8 @@ export default function VoiceAgent({
                 const actionName = action.description || action.type;
 
                 // Safety Check: Restricted Pages (Only block if we need to interact)
-                if (tab && tab.url && (
-                    tab.url.startsWith('chrome://') ||
-                    tab.url.startsWith('edge://') ||
-                    tab.url.startsWith('about:') ||
-                    tab.url.startsWith('view-source:') ||
-                    tab.url.includes('chrome.google.com/webstore')
-                )) {
-                    // Safe actions: navigation, opening tabs, talking, waiting, scanning
-                    const isSafeAction = ['navigate', 'open_tab', 'switch_tab', 'say', 'ask', 'wait', 'close_tab', 'scan_page', 'notify_plan', 'go_back', 'reload'].includes(action.type);
-                    if (!isSafeAction) {
+                if (tab && tab.url && isRestrictedPage(tab.url)) {
+                    if (!SAFE_ACTIONS_ON_RESTRICTED.includes(action.type)) {
                         return {
                             success: false,
                             failedAction: actionName,
@@ -474,17 +466,13 @@ export default function VoiceAgent({
                         }
                     } else if (action.type === 'go_back') {
                         if (tab?.id) {
-                            await chrome.tabs.goBack(tab.id);
-                            await new Promise(r => setTimeout(r, 1000)); // Wait for nav
-                            // Critical: Refresh tab reference
-                            [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                            const result = await handleGoBackAction(tab.id);
+                            if (result.newTab) tab = result.newTab;
                         }
                     } else if (action.type === 'reload') {
                         if (tab?.id) {
-                            await chrome.tabs.reload(tab.id);
-                            await new Promise(r => setTimeout(r, 1500)); // Wait for reload
-                            // Critical: Refresh tab reference
-                            [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                            const result = await handleReloadAction(tab.id);
+                            if (result.newTab) tab = result.newTab;
                         }
                     } else {
                         // "say" or "ask"
@@ -520,24 +508,14 @@ export default function VoiceAgent({
                     continue;
                 }
 
-                // 3. Handle Navigate (Legacy wrapper)
-                // Normalize url/value
-                if (!action.value && action.url) action.value = action.url;
-
                 if (action.type === 'navigate' && action.value) {
-                    let url = action.value;
-                    if (!url.startsWith('http')) url = 'https://' + url;
-
-                    if ((action as any).newTab) {
-                        await chrome.tabs.create({ url });
-                    } else {
-                        if (tab?.id) await chrome.tabs.update(tab.id, { url });
-                    }
-
-                    if (action.waitForPage !== false) await new Promise(r => setTimeout(r, 2000));
-
-                    // Critical: Refresh tab reference after navigation so subsequent actions see the new URL
-                    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                    const result = await handleNavigateAction(
+                        action.value,
+                        tab?.id || 0,
+                        (action as any).newTab || false,
+                        action.waitForPage !== false
+                    );
+                    if (result.newTab) tab = result.newTab;
                     continue;
                 }
 
