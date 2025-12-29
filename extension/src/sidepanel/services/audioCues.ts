@@ -5,11 +5,18 @@
 
 let audioContext: AudioContext | null = null;
 
-function getAudioContext(): AudioContext {
+export function getAudioContext(): AudioContext {
     if (!audioContext) {
         audioContext = new AudioContext();
     }
     return audioContext;
+}
+
+export async function resumeAudioContext(): Promise<void> {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+        await ctx.resume();
+    }
 }
 
 /**

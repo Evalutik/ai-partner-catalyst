@@ -69,6 +69,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         recognition.maxAlternatives = 3; // Get top 3 alternatives for better accuracy
 
         recognition.onstart = () => {
+            console.log('[Speech] onstart');
             setIsListening(true);
             setTranscript('');
             setInterimTranscript('');
@@ -76,7 +77,9 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         };
 
         recognition.onresult = (event: SpeechRecognitionEvent) => {
-            if (isAbortedRef.current) return; // STRICT DROP of results if aborted
+            if (isAbortedRef.current) return;
+
+            console.log('[Speech] onresult event fired');
 
             let interim = '';
             let final = '';
@@ -85,21 +88,30 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
                 const result = event.results[i];
                 if (result.isFinal) {
                     final += result[0].transcript;
+                    console.log('[Speech] Final result:', result[0].transcript);
                 } else {
                     interim += result[0].transcript;
                 }
             }
+            console.log('[Speech] For loop exited');
 
             if (final) {
+                console.log('[Speech] final transcript setting');
                 setTranscript(prev => prev + final);
+                console.log('[Speech] final transcript set');
             }
+            if (interim) {
+                console.log('[Speech] Interim:', interim);
+            }
+            console.log('[Speech] interm transcript setting');
             setInterimTranscript(interim);
+            console.log('[Speech] interm transcript set');
         };
 
         recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
             if (event.error === 'aborted') return; // Ignore aborted "errors" completely
 
-            console.error('[Speech] Error:', event.error);
+            console.error('[Speech] Error:', event.error); // Log all errors
 
             // Handle specific errors
             switch (event.error) {
@@ -108,6 +120,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
                     break;
                 case 'no-speech':
                     // Not an error, just no speech detected - restart silently
+                    console.log('[Speech] no-speech detected');
                     return;
                 case 'audio-capture':
                     setError('No microphone found. Please connect a microphone.');
@@ -126,10 +139,12 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         };
 
         recognition.onend = () => {
+            console.log('[Speech] onend');
             setIsListening(false);
             // Auto-restart only if allowed (not manually stopped/aborted) and no error
             if (recognitionRef.current && shouldAutoRestartRef.current && !error && !isAbortedRef.current) {
                 // Restart after brief pause
+                console.log('[Speech] Auto-restarting...');
                 setTimeout(() => {
                     try {
                         if (!isAbortedRef.current) {
@@ -150,9 +165,13 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
     }, [isSupported]);
 
     const start = useCallback(() => {
+        console.log('[Speech] start() called');
         if (!recognitionRef.current) return;
         // Don't start if already listening
-        if (isListening) return;
+        if (isListening) {
+            console.log('[Speech] Already listening');
+            return;
+        }
 
         // Enable auto-restart when user starts listening
         shouldAutoRestartRef.current = true;
@@ -172,6 +191,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
     }, [isListening]);
 
     const stop = useCallback(() => {
+        console.log('[Speech] stop() called');
         if (!recognitionRef.current) return;
 
         // Disable auto-restart when user explicitly stops
@@ -188,6 +208,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
     }, []);
 
     const abort = useCallback(() => {
+        console.log('[Speech] abort() called');
         if (!recognitionRef.current) return;
         shouldAutoRestartRef.current = false;
         isAbortedRef.current = true; // Set flag to drop all pending results

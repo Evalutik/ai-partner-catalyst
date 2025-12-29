@@ -2,7 +2,7 @@
  * Page Actions - Click, type, scroll, and other DOM interactions
  */
 
-import { getAudioUrl } from '../../services/api';
+
 
 export interface PageActionResult {
     success: boolean;
@@ -13,37 +13,17 @@ export interface PageActionResult {
 
 export interface SpeakCallbacks {
     onStatusChange?: (status: 'speaking' | 'processing') => void;
-    stopAudio?: () => void;
-    setAudioElement?: (audio: HTMLAudioElement | null) => void;
-    setSpeaking?: (speaking: boolean) => void;
+    speak?: (text: string) => Promise<void>;
 }
 
 /**
- * Speak text using TTS
+ * Speak text using provided callback
  */
 export async function speak(text: string, callbacks: SpeakCallbacks): Promise<void> {
-    callbacks.stopAudio?.();
-
-    try {
-        callbacks.onStatusChange?.('speaking');
-        callbacks.setSpeaking?.(true);
-
-        const audioUrl = await getAudioUrl(text);
-        const audio = new Audio(audioUrl);
-        callbacks.setAudioElement?.(audio);
-
-        await new Promise<void>((resolve) => {
-            audio.onended = () => resolve();
-            audio.onerror = () => resolve();
-            audio.play().catch(() => resolve());
-        });
-
-        callbacks.setAudioElement?.(null);
-        callbacks.setSpeaking?.(false);
-        callbacks.onStatusChange?.('processing');
-    } catch (e) {
-        console.warn('[Aeyes] TTS failed:', e);
-        callbacks.setSpeaking?.(false);
+    if (callbacks.speak) {
+        await callbacks.speak(text);
+    } else {
+        console.warn('[PageActions] No speak callback provided for:', text);
     }
 }
 

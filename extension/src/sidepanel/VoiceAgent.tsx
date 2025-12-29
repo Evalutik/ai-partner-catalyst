@@ -1,15 +1,13 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useSpeechRecognition } from './hooks/useSpeechRecognition';
-import { sendToBackend, getAudioUrl } from './services/api';
-import { playStartupSound, playListeningSound, playDoneSound, playMuteSound, playUnmuteSound } from './services/audioCues';
+import { playStartupSound, playListeningSound, playDoneSound, playMuteSound, playUnmuteSound, resumeAudioContext } from './services/audioCues';
 import { openPermissionPage } from './services/chrome';
 import LockIcon from './components/LockIcon';
 import { MicIcon, StopIcon, StopIconSmall } from './components/icons';
-import { executeActions as executeActionsCore, Action, ActionResult, ExecutionCallbacks } from './tools/actionExecutor';
-import { extractDOMWithRetry, capturePageContext } from './tools/analysis';
 import { useAudioVisualization } from './hooks/useAudioVisualization';
-import { checkForWakeWord } from './services/wakeWord';
 import { isEchoOfSpokenText, capitalizeFirst } from './services/echoFilter';
+import { useSpeaker } from './hooks/useSpeaker';
+import { useAgentLoop } from './hooks/useAgentLoop';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
 
@@ -31,7 +29,6 @@ export default function VoiceAgent({
     onTranscript,
     onResponse,
     autoStart = false,
-    onAutoStartComplete: _onAutoStartComplete, // Unused but kept for API compatibility
     status,
     onPermissionRequired,
     onStreamingTranscript,
@@ -40,34 +37,31 @@ export default function VoiceAgent({
 }: VoiceAgentProps) {
     const [error, setError] = useState<string | null>(null);
     const [hasAttemptedAutoStart, setHasAttemptedAutoStart] = useState(false);
-    const [conversationId, setConversationId] = useState<string | null>(null);
     const [hasGreeted, setHasGreeted] = useState(false);
-    const [isPaused, setIsPaused] = useState(false); // Listening paused by user
-    const [isStandby, setIsStandby] = useState(false); // Wake word listening mode
+    const [isPaused, setIsPaused] = useState(false);
     const [needsPermission, setNeedsPermission] = useState(false);
 
-    // Audio visualization hook
+    // Refs for control logic
+    const statusRef = useRef(status);
+    const isPausedRef = useRef(isPaused);
+    const stoppedManuallyRef = useRef(false);
+    const hasGreetedRef = useRef(false);
+    const lastSpeechTimeRef = useRef<number>(Date.now());
+    const transcriptRef = useRef<string>('');
+
+    // 1. Audio Visualization
+    const onVisPermission = useCallback((required: boolean) => {
+        setNeedsPermission(required);
+        onPermissionRequired?.(required);
+    }, [onPermissionRequired]);
+
     const {
         audioLevel,
         startVisualization: startAudioVisualization,
         stopVisualization: stopAudioVisualization
-    } = useAudioVisualization((required) => {
-        setNeedsPermission(required);
-        onPermissionRequired?.(required);
-    });
+    } = useAudioVisualization(onVisPermission);
 
-    // Refs for audio and processing state
-    const statusRef = useRef(status);
-    const hasGreetedRef = useRef(false);
-    const audioElementRef = useRef<HTMLAudioElement | null>(null);
-    const processingRef = useRef(false);
-    const speakingRef = useRef(false); // Synchronous speaking state
-    const lastSpokenTextRef = useRef<string>(''); // For echo cancellation
-    const lastShownPlanRef = useRef<string>(''); // For plan deduplication
-    const silenceTimeoutRef = useRef<number | null>(null);
-    const abortControllerRef = useRef<AbortController | null>(null); // For cancelling in-flight requests
-    const isStandbyRef = useRef(false); // Sync ref for standby mode
-
+    // 2. Speech Recognition
     const {
         isListening,
         transcript,
@@ -79,586 +73,275 @@ export default function VoiceAgent({
         abort: abortListening
     } = useSpeechRecognition();
 
-    const updateStatus = useCallback((newStatus: Status) => {
-        onStatusChange?.(newStatus);
-    }, [onStatusChange]);
-
-
+    // Sync refs for robust loops
+    useEffect(() => {
+        transcriptRef.current = transcript;
+    }, [transcript]);
 
     useEffect(() => {
         statusRef.current = status;
     }, [status]);
 
     useEffect(() => {
+        isPausedRef.current = isPaused;
+        if (!isPaused) stoppedManuallyRef.current = false;
+    }, [isPaused]);
+
+    const updateStatus = useCallback((newStatus: Status) => {
+        onStatusChange?.(newStatus);
+    }, [onStatusChange]);
+
+    // 3. Output Speaker (TTS)
+    // Memoize callbacks to prevent stable reference changes
+    const speakerCallbacks = useMemo(() => ({
+        onStatusChange: updateStatus,
+        onResponse
+    }), [updateStatus, onResponse]);
+
+    const speaker = useSpeaker(speakerCallbacks);
+
+    // 4. Core Agent Loop (Brain)
+
+    // Memoize controls to prevent recreating the object on every render (which triggers useAgentLoop update)
+    const agentControls = useMemo(() => ({
+        isPausedRef,
+        stoppedManuallyRef
+    }), []);
+
+    // Memoize callbacks for the same reason
+    const agentCallbacks = useMemo(() => ({
+        onStatusChange: updateStatus,
+        onTranscript: onTranscript || (() => { }),
+        onResponse: onResponse || (() => { }),
+        onPlan: onPlan || (() => { }),
+        onClearPlan: onClearPlan || (() => { }),
+        startListening,
+        stopListening,
+        abortListening,
+        startAudioVisualization
+    }), [updateStatus, onTranscript, onResponse, onPlan, onClearPlan, startListening, stopListening, abortListening, startAudioVisualization]);
+
+    const agentLoop = useAgentLoop(
+        speaker,
+        agentCallbacks,
+        agentControls
+    );
+
+    // Sync refs
+    useEffect(() => { statusRef.current = status; }, [status]);
+    useEffect(() => {
+        isPausedRef.current = isPaused;
+        if (!isPaused) stoppedManuallyRef.current = false;
+    }, [isPaused]);
+
+    // Error Handling
+    useEffect(() => {
         if (speechError) {
+            console.log('[VoiceAgent] Speech error:', speechError);
             if (speechError.includes('permission denied') || speechError.includes('not-allowed')) {
                 setNeedsPermission(true);
                 onPermissionRequired?.(true);
             }
-            setError(speechError);
-            updateStatus('idle');
+            // For 'no-speech', we generally don't show error to user, just restart via Watchdog.
+            // But if it's persistent...
+            if (speechError !== 'no-speech') {
+                setError(speechError);
+            }
+
+            // Only go idle if it's a critical error
+            if (speechError.includes('permission') || speechError.includes('not-allowed') || speechError.includes('audio-capture')) {
+                updateStatus('idle');
+            }
         }
     }, [speechError, updateStatus, onPermissionRequired]);
 
-    // Stop any playing audio
-    const stopAudio = useCallback(() => {
-        if (audioElementRef.current) {
-            audioElementRef.current.pause();
-            audioElementRef.current.currentTime = 0;
-            audioElementRef.current = null;
-        }
-        speakingRef.current = false; // Ensure speaking flag is cleared
-    }, []);
+    // Cleanup
+    useEffect(() => {
+        return () => {
+            stopAudioVisualization();
+        };
+    }, [stopAudioVisualization]);
 
-    // Cancel all in-flight requests
-    const cancelRequests = useCallback(() => {
-        if (abortControllerRef.current) {
-            abortControllerRef.current.abort();
-            abortControllerRef.current = null;
-        }
-    }, []);
+    useEffect(() => {
+        return () => {
+            speaker.stopAudio();
+        };
+    }, [speaker]);
 
+    // Greeting Logic
     const playGreeting = useCallback(async () => {
         if (hasGreetedRef.current) return;
         hasGreetedRef.current = true;
         setHasGreeted(true);
 
         try {
-            // Play startup sound first for blind users
+            await resumeAudioContext(); // Ensure audio is ready
             await playStartupSound();
 
-            updateStatus('speaking');
-            speakingRef.current = true;
+            await speaker.speak("Hi, I'm Aeyes. How can I help you?");
 
-            const greetingText = "Hi, I'm Aeyes. How can I help you?";
-
-            const audioUrl = await getAudioUrl(greetingText);
-
-            const audio = new Audio(audioUrl);
-            audioElementRef.current = audio;
-
-            // Sync: Show text just before playing
-            onResponse?.(greetingText);
-
-            await new Promise<void>((resolve) => {
-                audio.onended = () => resolve();
-                audio.onerror = () => resolve();
-                audio.play().catch(() => resolve());
-            });
-
-            audioElementRef.current = null;
-            speakingRef.current = false;
-
-            // Play done sound after speaking
             await playDoneSound();
 
-            // Seamless transition to listening
             const success = await startAudioVisualization();
             if (success) {
-                await playListeningSound(); // Audio cue for listening start
+                await playListeningSound();
                 updateStatus('listening');
                 startListening();
             } else {
                 updateStatus('idle');
             }
-
         } catch (e) {
-            console.warn("Greeting failed", e);
             updateStatus('idle');
-            speakingRef.current = false;
         }
-    }, [hasGreeted, updateStatus, startListening, startAudioVisualization, onResponse]);
+    }, [hasGreeted, updateStatus, startListening, startAudioVisualization, speaker]);
 
-    // Initial greeting on mount
+    // Auto-start
     useEffect(() => {
         if (autoStart && !hasAttemptedAutoStart && isSupported) {
             setHasAttemptedAutoStart(true);
-            // Small delay to ensure permissions are ready
-            setTimeout(() => {
-                playGreeting();
-            }, 500);
+            setTimeout(() => playGreeting(), 500);
         }
     }, [autoStart, hasAttemptedAutoStart, isSupported, playGreeting]);
 
+    const prevTextRef = useRef('');
+
+    // Buffer to hold the last valid text in case recognition resets (e.g. no-speech or auto-restart)
+    const lastSeenTextRef = useRef('');
+
+    // Input Processing Logic
     useEffect(() => {
-        return () => {
-            stopAudioVisualization();
-            stopAudio();
-        };
-    }, [stopAudioVisualization, stopAudio]);
+        // Guard: Don't listen if processing or speaking
+        if (statusRef.current === 'processing' || statusRef.current === 'speaking' || agentLoop.processing || speaker.speakingRef.current) return;
 
-    // Handle wake word activation
-    const activateFromStandby = useCallback(async () => {
-        console.log('[Aeyes] Wake word detected! Activating...');
-        setIsStandby(false);
-        isStandbyRef.current = false;
-
-        // Play activation sound and speak
-        await playUnmuteSound();
-        updateStatus('speaking');
-        speakingRef.current = true;
-
-        const wakeResponse = "Yes, how can I help you?";
-
-        try {
-            const audioUrl = await getAudioUrl(wakeResponse);
-            const audio = new Audio(audioUrl);
-            audioElementRef.current = audio;
-            lastSpokenTextRef.current = wakeResponse.toLowerCase(); // Echo protection
-            onResponse?.(wakeResponse);
-
-            await new Promise<void>((resolve) => {
-                audio.onended = () => resolve();
-                audio.onerror = () => resolve();
-                audio.play().catch(() => resolve());
-            });
-
-            audioElementRef.current = null;
-            speakingRef.current = false;
-
-            // Wait for echo to dissipate
-            await new Promise(r => setTimeout(r, 500));
-
-            // Start active listening
-            await playListeningSound();
-            startListening();
-            updateStatus('listening');
-        } catch (e) {
-            console.warn('[Aeyes] Wake activation failed:', e);
-            updateStatus('idle');
-            speakingRef.current = false;
-        }
-    }, [updateStatus, startListening, onResponse]);
-
-    useEffect(() => {
-        // STRICT GUARD: Ignore any input if we are processing or speaking
-        if (statusRef.current === 'processing' || statusRef.current === 'speaking' || processingRef.current || speakingRef.current) return;
-
-        // Calculate current real-time text
-        // transcript is automatically reset by startListening(), so we can use it directly
         const fullCurrentText = (transcript + interimTranscript).trim();
 
-        // STANDBY MODE: Only listen for wake words
-        if (isStandbyRef.current) {
-            if (fullCurrentText && checkForWakeWord(fullCurrentText)) {
-                activateFromStandby();
+        onStreamingTranscript?.(fullCurrentText ? capitalizeFirst(fullCurrentText) : '');
+
+        // Update activity timestamp ONLY whenever text changes content
+        if (fullCurrentText && fullCurrentText !== prevTextRef.current) {
+            lastSpeechTimeRef.current = Date.now();
+            prevTextRef.current = fullCurrentText;
+            lastSeenTextRef.current = fullCurrentText; // Update buffer
+        } else if (!fullCurrentText) {
+            prevTextRef.current = '';
+            // Do NOT clear lastSeenTextRef here.
+        }
+    }, [transcript, interimTranscript, onStreamingTranscript, status, agentLoop, speaker]);
+
+    // Robust Silence Detection Loop (Independent of Renders)
+    useEffect(() => {
+        // Optimization: Only run silence check interval when we are actually listening
+        if (status !== 'listening') return;
+
+        let tick = 0;
+        const checkSilence = async () => {
+            tick++;
+
+            // Extra safety guards (though effect should cleanup on status change)
+            if (agentLoop.processing || speaker.speakingRef.current) {
                 return;
             }
-            // In standby, don't show transcript or process anything else
-            return;
-        }
 
-        // Echo Masking: If text matches last spoken, hide it
-        const spoken = lastSpokenTextRef.current;
-        if (spoken && fullCurrentText && isEchoOfSpokenText(fullCurrentText, spoken)) {
-            onStreamingTranscript?.('');
-            return;
-        }
+            // Check if we have text to process
+            // Use buffered text if transcript is empty (handled the case where it was wiped by restart)
+            let textToProcess = transcriptRef.current?.trim();
+            if (!textToProcess) {
+                textToProcess = lastSeenTextRef.current?.trim();
+            }
 
-        if (fullCurrentText) {
-            onStreamingTranscript?.(capitalizeFirst(fullCurrentText));
-        } else {
-            onStreamingTranscript?.('');
-        }
+            if (!textToProcess) {
+                return;
+            }
 
-        if (!transcript) return;
+            const now = Date.now();
+            const timeSinceSpeech = now - lastSpeechTimeRef.current;
 
-        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+            if (timeSinceSpeech > 1000) {
+                // SIlence detected
+                console.log(`[VoiceAgent] Silence detected (${timeSinceSpeech}ms). Processing: "${textToProcess}"`);
 
-        if (transcript.trim()) {
-            silenceTimeoutRef.current = window.setTimeout(async () => {
-                // Double check status before processing using Refs for live state
-                if (statusRef.current === 'processing' || statusRef.current === 'speaking' || processingRef.current || speakingRef.current) return;
+                // Reset timestamp IMMEDIATELY to prevent double-firing
+                lastSpeechTimeRef.current = Date.now();
 
-                const newText = transcript.trim();
-
-                // Final Echo Check before processing
-                if (spoken && newText && isEchoOfSpokenText(newText, spoken)) {
-                    console.log('[Aeyes] Ignored self-hearing (final):', newText);
-                    startListening(); // Reset
+                // Echo check logic moved here
+                const spoken = speaker.lastSpokenTextRef.current;
+                if (spoken && textToProcess && isEchoOfSpokenText(textToProcess, spoken)) {
+                    console.log('[Aeyes] Ignored self-hearing (final):', textToProcess);
+                    startListening(); // Restart to clear
+                    lastSeenTextRef.current = ''; // Clear buffer since we consumed it (as echo)
                     return;
                 }
 
-                if (newText) {
-                    // Audio cue: user finished speaking
-                    await playDoneSound();
-                    await processTranscript(newText);
-                }
-            }, 1000);
-        }
+                await playDoneSound();
 
-        return () => {
-            if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+                // Clear the buffer right before processing
+                lastSeenTextRef.current = '';
+                await agentLoop.processTranscript(textToProcess);
+            }
         };
-    }, [transcript, interimTranscript, onStreamingTranscript, status]);
 
-    // Watchdog: Ensure speech recognition is actually running when we think it is
+        const interval = setInterval(checkSilence, 200);
+        return () => clearInterval(interval);
+    }, [status, agentLoop, speaker, startListening]); // Stable deps
+
+    // Watchdog
     useEffect(() => {
-        if (status === 'listening' && !isListening && !isPaused && !error && !processingRef.current) {
+        if (status === 'listening' && !isListening && !isPaused && !error && !agentLoop.processing) {
             const timeout = setTimeout(() => {
+                // Double check if we are still in "should be listening" state
                 if (status === 'listening' && !isListening && !isPaused && !error) {
                     console.log('[VoiceAgent] Watchdog: Restarting stalled recognition...');
                     startListening();
                 }
-            }, 500); // Give it a moment to transition
+            }, 1000); // Relaxed timeout from 500ms to 1000ms
             return () => clearTimeout(timeout);
         }
-    }, [status, isListening, isPaused, error, startListening]);
+    }, [status, isListening, isPaused, error, startListening, agentLoop.processing]);
 
-
-
+    // Permission Check
     useEffect(() => {
-        // Check initial permission state
         navigator.permissions.query({ name: 'microphone' as PermissionName }).then((permissionStatus) => {
-            if (permissionStatus.state === 'denied') {
-                setNeedsPermission(true);
-                onPermissionRequired?.(true);
-            } else if (permissionStatus.state === 'granted' && !hasGreeted) {
-                playGreeting();
-            }
-            permissionStatus.onchange = () => {
+            const check = () => {
                 const denied = permissionStatus.state === 'denied';
                 setNeedsPermission(denied);
                 onPermissionRequired?.(denied);
-
-                if (!denied && !hasGreeted) {
-                    playGreeting();
-                }
+                if (!denied && !hasGreetedRef.current) playGreeting();
             };
+            check();
+            permissionStatus.onchange = check;
         });
     }, [onPermissionRequired, hasGreeted, playGreeting]);
 
-    // Ref to track paused state in async functions
-    const isPausedRef = useRef(isPaused);
-    const stoppedManuallyRef = useRef(false); // Track manual stop to avoid race conditions
-    const listeningStartTimeRef = useRef<number>(0);
+    const handlePauseToggle = useCallback(async () => {
+        const isCurrentlyInactive = isPaused || agentLoop.isStandby;
 
-    useEffect(() => {
-        isPausedRef.current = isPaused;
-        if (!isPaused) stoppedManuallyRef.current = false;
-    }, [isPaused]);
+        if (isCurrentlyInactive) {
+            // Resume
+            await resumeAudioContext(); // Resuming
+            await playUnmuteSound();
+            setIsPaused(false);
+            agentLoop.setStandby(false);
+            stoppedManuallyRef.current = false;
+            startListening();
+            updateStatus('listening');
+        } else {
+            // Pause/Stop
+            await playMuteSound();
+            setIsPaused(true);
+            agentLoop.setStandby(false);
+            stoppedManuallyRef.current = true;
 
-    // Track when listening starts for grace period
-    useEffect(() => {
-        if (status === 'listening') {
-            listeningStartTimeRef.current = Date.now();
+            agentLoop.cancelRequests();
+            speaker.stopAudio();
+            stopListening();
+
+            updateStatus('idle');
         }
-    }, [status]);
+    }, [isPaused, agentLoop, startListening, stopListening, speaker, updateStatus]);
 
-    // Execute actions wrapper - provides React callbacks to the executor
-    const executeActions = useCallback(async (actions: Action[]): Promise<ActionResult> => {
-        const callbacks: ExecutionCallbacks = {
-            onPlan,
-            onStatusChange: updateStatus,
-            stopAudio,
-            setAudioElement: (audio) => { audioElementRef.current = audio; },
-            setSpeaking: (speaking) => { speakingRef.current = speaking; },
-            getLastShownPlan: () => lastShownPlanRef.current,
-            setLastShownPlan: (plan) => { lastShownPlanRef.current = plan; }
-        };
-        return executeActionsCore(actions, callbacks);
-    }, [onPlan, updateStatus, stopAudio]);
-
-    const processTranscript = useCallback(async (text: string) => {
-        if (processingRef.current) return;
-        processingRef.current = true;
-
-        // Create new AbortController for this processing session
-        abortControllerRef.current = new AbortController();
-        const signal = abortControllerRef.current.signal;
-
-        // Stop listening during processing phase
-        abortListening();
-
-        const capitalizedText = text.charAt(0).toUpperCase() + text.slice(1);
-        onTranscript?.(capitalizedText);
-
-        updateStatus('processing');
-
-        const MAX_TOTAL_STEPS = 30;
-        const MAX_CONSECUTIVE_FAILURES = 3;
-        const MAX_SAME_PLAN_REPEATS = 3; // Detect loops when same plan repeats too many times
-
-        let stepCount = 0;
-        let consecutiveFailures = 0;
-        let samePlanRepeatCount = 0; // Track how many times the same plan is sent
-        let lastPlanText = ''; // Track the last plan to detect repeats
-        let currentTranscript = capitalizedText;
-        let finalResponseText = '';
-        let loopDomContext: any | null = null; // Track DOM across loop
-        let response: any = null; // Store response across iterations
-
-        let currentConversationId = conversationId; // Local copy for loop continuity
-
-        try {
-            while (stepCount < MAX_TOTAL_STEPS) {
-                // Check if user stopped manually during loop
-                if (stoppedManuallyRef.current) break;
-
-                stepCount++;
-
-                // 1. Get DOM context from current page
-                // Note: On restricted pages, extractDOMWithRetry will return null (handled deep in extractDOMFromPage via message error or simple null return)
-                // But we don't want to crash. 
-                // We should probably check URL here too to avoid "I can't see" loop if we are genuinely on newtab.
-                // But let's let backend handle "I can't see anything" naturally.
-                loopDomContext = await extractDOMWithRetry();
-                const pageContext = await capturePageContext();
-
-                // Safety: If follow-up requested but NO DOM, break loop to prevent infinite recursion
-                if (stepCount > 1 && !loopDomContext && !response?.actions?.length) {
-                    // Exception: we might be navigating.
-                    // If we just navigated, loopDomContext might be null temporarily.
-                    // But if we are persistently null, we break.
-
-                    // Simple logic: if connection is good, proceed.
-                    // If restricted page, we likely have NULL dom, but we might want to ask questions.
-                    // We'll let it proceed. 
-                    // Wait-- original logic blocked if !loopDomContext.
-                    // Let's modify: if page is protected, we proceed WITHOUT dom.
-
-                    const isProtected = pageContext?.url?.startsWith('chrome://') || pageContext?.url?.startsWith('edge://');
-                    if (!isProtected) {
-                        console.warn('[Aeyes] Infinite loop risk: Follow-up requested but no DOM available.');
-                        finalResponseText = "I can't see the page content right now. Please make sure you're on an accessible web page.";
-                        break;
-                    }
-                }
-
-
-                // Check abort before sending
-                if (signal.aborted) break;
-
-                // 2. Send transcript AND context to backend with conversation ID
-                response = await sendToBackend({
-                    transcript: currentTranscript,
-                    context: loopDomContext || undefined,
-                    page_context: pageContext || undefined,
-                    conversation_id: currentConversationId || undefined
-                }, signal);
-
-                if (stoppedManuallyRef.current) break;
-
-                // Store conversation ID for continuity
-                if (response.conversation_id) {
-                    currentConversationId = response.conversation_id; // Update local loop var
-                    if (!conversationId) setConversationId(response.conversation_id); // Sync React state if needed
-                }
-
-                // 2b. Loop Detection - check if we're getting the same plan repeatedly
-                const currentPlan = response.actions?.find((a: any) => a.type === 'notify_plan');
-                if (currentPlan) {
-                    const planText = currentPlan.value || currentPlan.args?.plan || currentPlan.args?.text || '';
-                    if (planText === lastPlanText) {
-                        samePlanRepeatCount++;
-                        console.warn(`[Aeyes] Same plan repeated ${samePlanRepeatCount} times`);
-                        if (samePlanRepeatCount >= MAX_SAME_PLAN_REPEATS) {
-                            console.warn('[Aeyes] Loop detected - same plan repeated many times. continuing...');
-                            // DO NOT BREAK - User requested to keep going
-                        }
-                    } else {
-                        samePlanRepeatCount = 1; // Reset counter for new plan
-                        lastPlanText = planText;
-                    }
-                }
-
-                // 3. Execute actions if any
-                let actionResult = { success: true } as { success: boolean; failedAction?: string; failReason?: string; lastDom?: any };
-                if (response.actions && response.actions.length > 0) {
-                    actionResult = await executeActions(response.actions);
-                }
-
-                // 3b. Execute post_analysis tools if actions succeeded
-                // This implements "Execute Action -> Execute Analysis -> Return Combined Result"
-                if (actionResult.success && response.post_analysis && response.post_analysis.length > 0) {
-                    console.log('[Aeyes] Executing post_analysis tools:', response.post_analysis);
-                    // Small delay to let page settle after action
-                    await new Promise(resolve => setTimeout(resolve, 500));
-
-                    // Execute perception tools (results feed into next loop iteration via DOM extraction)
-                    const analysisResult = await executeActions(response.post_analysis);
-                    if (!analysisResult.success) {
-                        console.warn('[Aeyes] Post-analysis failed:', analysisResult.failReason);
-                        // Don't fail the whole action, just log the warning
-                    }
-                }
-
-                if (stoppedManuallyRef.current) break;
-
-                // 4. Handle Failure
-                if (!actionResult.success) {
-                    consecutiveFailures++;
-                    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-                        throw new Error(`Failed to complete task after ${MAX_CONSECUTIVE_FAILURES} failed attempts on step "${actionResult.failedAction}": ${actionResult.failReason}`);
-                    }
-
-                    console.log(`[Aeyes] Action failed (consecutive failure ${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`, actionResult.failReason);
-
-                    // Build recovery message for AI
-                    currentTranscript = `[ACTION_FAILED] I tried to "${actionResult.failedAction}" but it failed: ${actionResult.failReason}. Please suggest a recovery action (scroll, wait, ask user for help, or try a different approach). Current page context is attached.`;
-
-                    // Use the last DOM from the failed action if available to give AI better context
-                    if (actionResult.lastDom) {
-                        // Ideally we would pass this to the next loop iteration's sendToBackend,
-                        // but extractDOMFromPage() will run again at top of loop.
-                        // We rely on the page state being whatever it is now.
-                    }
-                    continue; // Loop back to try recovery
-                }
-
-                // Success! Reset consecutive failures
-                consecutiveFailures = 0;
-
-                // 5. Check Follow Up
-                if (response.requiresFollowUp) {
-                    console.log(`[Aeyes] Follow-up required (step ${stepCount}/${MAX_TOTAL_STEPS})...`);
-
-                    // Wait a bit for new page to fully load if actions were just taken
-                    if (response.actions && response.actions.length > 0) {
-                        await new Promise(resolve => setTimeout(resolve, 1500));
-                    }
-
-                    currentTranscript = "[Continue - analyze the current page and complete the task]";
-                    continue; // Loop back to continue task
-                }
-
-                // 6. No failure, no follow-up -> We are done!
-                finalResponseText = response.response;
-                break;
-            }
-
-            if (stoppedManuallyRef.current) {
-                updateStatus('idle');
-                processingRef.current = false;
-                return;
-            }
-
-            // Exited loop. Check if we failed to get a final response.
-            if (!finalResponseText) {
-                if (stepCount >= MAX_TOTAL_STEPS) {
-                    console.error('[Aeyes] Max total steps reached');
-                    finalResponseText = "I'm sorry, I tried to complete the task but it required too many steps. Could you try breaking it down into simpler requests?";
-                } else {
-                    // Should not start here unless empty response from backend
-                    finalResponseText = "Task completed.";
-                }
-            }
-
-            // Check if cancelled before speaking
-            if (stoppedManuallyRef.current || signal.aborted) {
-                updateStatus('idle');
-                processingRef.current = false;
-                return;
-            }
-
-            // Speak final response
-            updateStatus('speaking');
-            speakingRef.current = true;
-            const audioUrl = await getAudioUrl(finalResponseText, signal);
-
-            if (stoppedManuallyRef.current) { updateStatus('idle'); return; }
-
-            const audio = new Audio(audioUrl);
-            audioElementRef.current = audio;
-            lastSpokenTextRef.current = finalResponseText.trim().toLowerCase(); // Store for echo cancellation
-
-            onResponse?.(finalResponseText);
-
-            await new Promise<void>((resolve) => {
-                const finish = () => {
-                    resolve();
-                };
-                audio.onended = finish;
-                audio.onpause = finish; // Resolve on pause (Stop button) to unblock the loop
-                audio.onerror = finish;
-                audio.play().catch(() => finish());
-            });
-
-            audioElementRef.current = null;
-            speakingRef.current = false;
-
-            // Task complete - clear plan and enter STANDBY mode
-            onClearPlan?.();
-            lastShownPlanRef.current = ''; // Reset plan tracking
-            setConversationId(null); // Reset conversation for next task
-
-            // STANDBY MODE: Show as idle but keep listening for wake words
-            if (!stoppedManuallyRef.current && !isPausedRef.current) {
-                // Wait delay to ensure audio is fully done and avoid self-hearing
-                await new Promise(resolve => setTimeout(resolve, 1000));
-
-                if (!stoppedManuallyRef.current && !isPausedRef.current) {
-                    // Enter standby mode - listening in background for wake word
-                    setIsStandby(true);
-                    isStandbyRef.current = true;
-                    stoppedManuallyRef.current = false; // Ensure we are allowed to listen
-
-                    await playMuteSound(); // Indicate going to sleep
-
-                    // CRITICAL: Start audio visualization AND speech recognition
-                    const visSuccess = await startAudioVisualization();
-                    if (visSuccess) {
-                        startListening();
-                        console.log('[Aeyes] Entering standby mode - listening for wake word "Aeyes"');
-                    } else {
-                        console.warn('[Aeyes] Failed to start standby visualization');
-                    }
-
-                    updateStatus('idle');
-                } else {
-                    updateStatus('idle');
-                }
-            } else {
-                updateStatus('idle');
-            }
-
-        } catch (err: any) {
-            // Ignore abort errors (user cancelled)
-            if (err?.name === 'AbortError') {
-                console.log('[Aeyes] Request cancelled by user');
-                updateStatus('idle');
-                processingRef.current = false;
-                return;
-            }
-            console.error('[Aeyes] Process failed:', err);
-            const errorMsg = err instanceof Error ? err.message : 'I encountered an error.';
-
-            // Speak the error to the user
-            try {
-                updateStatus('speaking');
-                speakingRef.current = true;
-                const audioUrl = await getAudioUrl("I'm having trouble with that. " + errorMsg);
-                const audio = new Audio(audioUrl);
-                audioElementRef.current = audio;
-                onResponse?.("Error: " + errorMsg);
-                await new Promise<void>((resolve) => {
-                    audio.onended = () => resolve();
-                    audio.onerror = () => resolve();
-                    audio.play().catch(() => resolve());
-                });
-                audioElementRef.current = null;
-                speakingRef.current = false;
-            } catch (e) { /* ignore audio error */ }
-
-            if (!isPaused && !stoppedManuallyRef.current) {
-                // Wait small delay here too
-                await new Promise(resolve => setTimeout(resolve, 1000));
-
-                // Actually usually better to go back to listening
-                await playListeningSound();
-                startListening();
-                updateStatus('listening');
-            } else {
-                updateStatus('idle');
-            }
-        } finally {
-            processingRef.current = false;
-        }
-    }, [transcript, onTranscript, onResponse, updateStatus, executeActions, isPaused, abortListening, stopListening, startListening, conversationId]);
+    if (!isSupported) return <div className="error-text">Speech recognition not supported</div>;
 
     const isActive = status !== 'idle';
-
-    // Get color for current state
     const getStateColor = () => {
         switch (status) {
             case 'listening': return 'var(--color-listening)';
@@ -668,39 +351,11 @@ export default function VoiceAgent({
         }
     };
 
-    // Toggle pause/resume listening
-    const handlePauseToggle = useCallback(async () => {
-        if (isPaused || isStandby) {
-            // Resume listening (or exit standby)
-            await playUnmuteSound();
-            setIsPaused(false);
-            setIsStandby(false);
-            isStandbyRef.current = false;
-            stoppedManuallyRef.current = false;
-            startListening();
-            updateStatus('listening');
-        } else {
-            // Stop everything: listening, speaking, AND processing
-            await playMuteSound();
-            setIsPaused(true);
-            setIsStandby(false);
-            isStandbyRef.current = false;
-            stoppedManuallyRef.current = true; // Set manual stop flag to prevent race conditions
-            cancelRequests(); // Cancel any in-flight API requests
-            stopAudio(); // Stop any current speech
-            stopListening();
-            processingRef.current = false; // Reset processing flag
-            updateStatus('idle');
-        }
-    }, [isPaused, isStandby, startListening, stopListening, stopAudio, cancelRequests, updateStatus]);
-
-    if (!isSupported) {
-        return <div className="error-text">Speech recognition not supported</div>;
-    }
+    const isIdleMode = isPaused || agentLoop.isStandby;
 
     return (
         <div className="flex flex-col gap-3">
-            {/* Audio Visualizer - color synced with status */}
+            {/* Audio Visualizer */}
             <div className="flex items-end justify-center gap-0.5 h-8">
                 {audioLevel.map((level, i) => (
                     <div
@@ -715,14 +370,14 @@ export default function VoiceAgent({
                 ))}
             </div>
 
-            {/* Pause/Resume Toggle Button */}
+            {/* Toggle Button */}
             {!needsPermission && (
                 <button
                     onClick={handlePauseToggle}
-                    className={`btn-voice ${(isPaused || isStandby) ? 'btn-voice-idle' : `btn-voice-${status}`}`}
-                    aria-label={(isPaused || isStandby) ? 'Start listening' : status === 'processing' ? 'Stop processing' : 'Stop listening'}
+                    className={`btn-voice ${isIdleMode ? 'btn-voice-idle' : `btn-voice-${status}`}`}
+                    aria-label={isIdleMode ? 'Start listening' : status === 'processing' ? 'Stop processing' : 'Stop listening'}
                 >
-                    {(isPaused || isStandby) ? (
+                    {isIdleMode ? (
                         <MicIcon />
                     ) : status === 'processing' ? (
                         <div className="spinner-wrapper">
@@ -732,21 +387,19 @@ export default function VoiceAgent({
                     ) : (
                         <StopIcon />
                     )}
-                    <span>{(isPaused || isStandby) ? 'Start' : status === 'processing' ? 'Processing...' : 'Stop'}</span>
+                    <span>{isIdleMode ? 'Start' : status === 'processing' ? 'Processing...' : 'Stop'}</span>
                 </button>
             )}
 
-            {/* Permission Request */}
+            {/* Permission Card */}
             {needsPermission && (
                 <div className="permission-card animate-fade-in">
-                    <div className="mb-3 text-center">
-                        <LockIcon />
-                    </div>
+                    <div className="mb-3 text-center"><LockIcon /></div>
                     <h3 className="text-sm font-semibold mb-2" style={{ color: 'var(--color-text-primary)' }}>
                         Microphone Access Needed
                     </h3>
                     <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)', lineHeight: '1.5' }}>
-                        Please allow microphone access to use voice commands. You will be redirected to the settings page to enable access.
+                        Please allow microphone access to use voice commands.
                     </p>
                     <button
                         onClick={openPermissionPage}
@@ -758,12 +411,10 @@ export default function VoiceAgent({
                 </div>
             )}
 
-            {/* Error */}
+            {/* Error Display */}
             {error && !needsPermission && (
                 <p className="error-text animate-fade-in">{error}</p>
             )}
-
-
         </div>
     );
 }

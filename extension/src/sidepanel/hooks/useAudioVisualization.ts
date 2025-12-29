@@ -24,14 +24,21 @@ export function useAudioVisualization(
     const streamRef = useRef<MediaStream | null>(null);
 
     const startVisualization = useCallback(async (): Promise<boolean> => {
+        console.log('[UseAudioVis] startVisualization called');
         try {
+            console.log('[UseAudioVis] Requesting microphone access...');
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            console.log('[UseAudioVis] Microphone access granted. Stream ID:', stream.id);
             streamRef.current = stream;
 
+            console.log('[UseAudioVis] Creating AudioContext...');
             const audioContext = new AudioContext();
+            console.log('[UseAudioVis] AudioContext created. State:', audioContext.state);
+
             const analyser = audioContext.createAnalyser();
             analyser.fftSize = 64;
 
+            console.log('[UseAudioVis] Connecting source...');
             const source = audioContext.createMediaStreamSource(stream);
             source.connect(analyser);
 
@@ -42,7 +49,7 @@ export function useAudioVisualization(
 
             const updateLevels = () => {
                 if (!analyserRef.current) return;
-
+                // ... (rest is fine)
                 analyserRef.current.getByteFrequencyData(dataArray);
 
                 const levels: number[] = [];
@@ -61,11 +68,14 @@ export function useAudioVisualization(
                 animationFrameRef.current = requestAnimationFrame(updateLevels);
             };
 
+            console.log('[UseAudioVis] Starting animation loop...');
             updateLevels();
             setNeedsPermission(false);
             onPermissionChange?.(false);
+            console.log('[UseAudioVis] Visualization started successfully');
             return true;
-        } catch {
+        } catch (e) {
+            console.error('[UseAudioVis] Failed to start visualization:', e);
             setNeedsPermission(true);
             onPermissionChange?.(true);
             return false;

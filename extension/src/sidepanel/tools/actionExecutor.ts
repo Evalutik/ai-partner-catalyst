@@ -108,7 +108,7 @@ export async function executeActions(
 
             // 4. Plan Notification
             if (action.type === 'notify_plan') {
-                const planText = action.value || action.args?.plan || action.args?.text;
+                const planText = action.value || action.args?.plan || action.args?.text || (action as any).plan;
                 if (planText && planText !== callbacks.getLastShownPlan?.()) {
                     console.log('[Aeyes Plan]', planText);
                     callbacks.setLastShownPlan?.(planText);
