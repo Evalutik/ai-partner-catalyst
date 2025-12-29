@@ -2,13 +2,14 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { useSpeechRecognition } from './hooks/useSpeechRecognition';
 import { sendToBackend, getAudioUrl } from './services/api';
 import { playStartupSound, playListeningSound, playDoneSound, playMuteSound, playUnmuteSound } from './services/audioCues';
-import { extractDOMWithRetry, capturePageContext, openPermissionPage } from './services/chrome';
+import { openPermissionPage } from './services/chrome';
 import LockIcon from './components/LockIcon';
 import { MicIcon, StopIcon, StopIconSmall } from './components/icons';
-import { handleTabAction } from './tools/tabActions';
-import { handleNavigateAction, handleGoBackAction, handleReloadAction, isRestrictedPage, SAFE_ACTIONS_ON_RESTRICTED } from './tools/navigationActions';
+import { executeActions as executeActionsCore, Action, ActionResult, ExecutionCallbacks } from './tools/actionExecutor';
+import { extractDOMWithRetry, capturePageContext } from './tools/analysis';
 import { useAudioVisualization } from './hooks/useAudioVisualization';
 import { checkForWakeWord } from './services/wakeWord';
+import { isEchoOfSpokenText, capitalizeFirst } from './services/echoFilter';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
 
@@ -247,24 +248,15 @@ export default function VoiceAgent({
             return;
         }
 
-        // Echo Masking
-
-        // Content Check: If text matches last spoken, hide it.
+        // Echo Masking: If text matches last spoken, hide it
         const spoken = lastSpokenTextRef.current;
-        if (spoken && fullCurrentText) {
-            const cleanInput = fullCurrentText.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").trim();
-            const cleanSpoken = spoken.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").trim();
-
-            // Check if input is a substring of spoken (Echo)
-            if (cleanSpoken.includes(cleanInput)) {
-                onStreamingTranscript?.('');
-                return;
-            }
+        if (spoken && fullCurrentText && isEchoOfSpokenText(fullCurrentText, spoken)) {
+            onStreamingTranscript?.('');
+            return;
         }
 
         if (fullCurrentText) {
-            const capitalizedText = fullCurrentText.charAt(0).toUpperCase() + fullCurrentText.slice(1);
-            onStreamingTranscript?.(capitalizedText);
+            onStreamingTranscript?.(capitalizeFirst(fullCurrentText));
         } else {
             onStreamingTranscript?.('');
         }
@@ -281,14 +273,10 @@ export default function VoiceAgent({
                 const newText = transcript.trim();
 
                 // Final Echo Check before processing
-                if (spoken && newText) {
-                    const cleanInput = newText.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").trim();
-                    const cleanSpoken = spoken.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").trim();
-                    if (cleanSpoken.includes(cleanInput)) {
-                        console.log('[Aeyes] Ignored self-hearing (final):', newText);
-                        startListening(); // Reset
-                        return;
-                    }
+                if (spoken && newText && isEchoOfSpokenText(newText, spoken)) {
+                    console.log('[Aeyes] Ignored self-hearing (final):', newText);
+                    startListening(); // Reset
+                    return;
                 }
 
                 if (newText) {
@@ -357,301 +345,19 @@ export default function VoiceAgent({
         }
     }, [status]);
 
-    // Execute actions on current page via content script with multi-step support
-    // Returns execution result for adaptive error handling
-    const executeActions = useCallback(async (actions: Array<{
-        type: string;
-        elementId?: string;
-        value?: string;
-        waitForPage?: boolean;
-        needsDom?: boolean;
-        description?: string;
-        tabId?: number;
-    }>): Promise<{ success: boolean; failedAction?: string; failReason?: string; lastDom?: any }> => {
-        if (!actions || actions.length === 0) return { success: true };
-
-        try {
-            let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-            // Note: Global restricted page check removed to allow navigation/safe actions.
-            // Check is now per-action loop.
-
-            let lastDom: any | null = null;
-
-            for (let i = 0; i < actions.length; i++) {
-                const rawAction = actions[i];
-                const action: any = {
-                    ...rawAction,
-                    ...((rawAction as any).args || {})
-                };
-                const actionName = action.description || action.type;
-
-                // Safety Check: Restricted Pages (Only block if we need to interact)
-                if (tab && tab.url && isRestrictedPage(tab.url)) {
-                    if (!SAFE_ACTIONS_ON_RESTRICTED.includes(action.type)) {
-                        return {
-                            success: false,
-                            failedAction: actionName,
-                            failReason: 'I cannot interact with this protected browser page. Please try navigating to a different website first.'
-                        };
-                    }
-                }
-
-                console.log(`[Aeyes Orchestrator] Step ${i + 1}/${actions.length}: Executing ${action.type}`, action);
-
-                // 1. Intercept Tab Actions
-                if (['open_tab', 'close_tab', 'switch_tab'].includes(action.type)) {
-                    // Update value/url mapping for tab actions
-                    if (!action.value && action.url) action.value = action.url;
-
-                    const result = await handleTabAction(action);
-                    console.log(`[Aeyes Orchestrator] Tab Action Result:`, result);
-                    if (!result.success) {
-                        return { success: false, failedAction: actionName, failReason: result.message };
-                    }
-                    // Wait for tab switch/create
-                    await new Promise(r => setTimeout(r, 500));
-                    // Refresh current tab reference
-                    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-                    continue;
-                }
-
-                // 2. Intercept Communication/Wait Actions
-                if (['say', 'ask', 'wait', 'scan_page', 'notify_plan', 'go_back', 'reload', 'fetch_dom', 'get_page_status'].includes(action.type)) {
-                    if (action.type === 'wait') {
-                        const duration = parseInt(action.value || (action.args && action.args.duration) || '1000');
-                        await new Promise(r => setTimeout(r, duration));
-                    } else if (action.type === 'scan_page') {
-                        // "scan_page" just means refresh context. We do nothing here, loop continues and extracts DOM.
-                        await new Promise(r => setTimeout(r, 500));
-                    } else if (action.type === 'fetch_dom') {
-                        // Execute DOM extraction with optional selector and optimize flag
-                        if (tab?.id) {
-                            try {
-                                const selector = action.args?.selector || '';
-                                const limit = action.args?.limit || 50;
-                                const optimize = action.args?.optimize ?? true;
-                                await chrome.tabs.sendMessage(tab.id, {
-                                    type: 'EXTRACT_DOM',
-                                    selector,
-                                    limit,
-                                    optimize
-                                });
-                            } catch (e) {
-                                console.warn('[Aeyes] fetch_dom failed:', e);
-                            }
-                        }
-                    } else if (action.type === 'get_page_status') {
-                        // Execute page status check
-                        if (tab?.id) {
-                            try {
-                                await chrome.tabs.sendMessage(tab.id, { type: 'GET_PAGE_STATUS' });
-                            } catch (e) {
-                                console.warn('[Aeyes] get_page_status failed:', e);
-                            }
-                        }
-                    } else if (action.type === 'notify_plan') {
-                        const planText = action.value || (action.args && action.args.plan) || action.args?.text;
-                        if (planText) {
-                            // Show plan in UI and log to console
-                            if (planText !== lastShownPlanRef.current) {
-                                console.log('[Aeyes Plan]', planText);
-                                lastShownPlanRef.current = planText;
-                                onPlan?.(planText); // Show in UI
-                                // Brief pause to let plan processing settle
-                                await new Promise(r => setTimeout(r, 500));
-                            } else {
-                                console.log('[Aeyes Plan] (unchanged)', planText);
-                            }
-                        }
-                    } else if (action.type === 'go_back') {
-                        if (tab?.id) {
-                            const result = await handleGoBackAction(tab.id);
-                            if (result.newTab) tab = result.newTab;
-                        }
-                    } else if (action.type === 'reload') {
-                        if (tab?.id) {
-                            const result = await handleReloadAction(tab.id);
-                            if (result.newTab) tab = result.newTab;
-                        }
-                    } else {
-                        // "say" or "ask"
-                        const textToSpeak = action.value || (action.args && action.args.text);
-                        if (textToSpeak) {
-                            // Stop any previous audio
-                            stopAudio();
-
-                            // Visual update (optional, maybe too noisy to show every 'say' action text?)
-                            // onResponse?.(textToSpeak); 
-
-                            // Fetch and play
-                            try {
-                                updateStatus('speaking');
-                                speakingRef.current = true;
-                                const audioUrl = await getAudioUrl(textToSpeak);
-                                const audio = new Audio(audioUrl);
-                                audioElementRef.current = audio;
-
-                                await new Promise<void>((resolve) => {
-                                    audio.onended = () => resolve();
-                                    audio.onerror = () => resolve();
-                                    audio.play().catch(() => resolve());
-                                });
-                                audioElementRef.current = null;
-                                speakingRef.current = false;
-                                updateStatus('processing'); // Go back to processing/listening state
-                            } catch (e) {
-                                console.warn('[Aeyes] TTS failed for action:', e);
-                            }
-                        }
-                    }
-                    continue;
-                }
-
-                if (action.type === 'navigate' && action.value) {
-                    const result = await handleNavigateAction(
-                        action.value,
-                        tab?.id || 0,
-                        (action as any).newTab || false,
-                        action.waitForPage !== false
-                    );
-                    if (result.newTab) tab = result.newTab;
-                    continue;
-                }
-
-                if (!tab?.id) return { success: false, failedAction: actionName, failReason: 'No active tab for page action' };
-
-                // 4. Page Actions (Click, Type, etc.)
-
-                // If action needs DOM, fetch it
-                if (action.needsDom) {
-                    console.log('[Aeyes] Fetching fresh DOM for element resolution...');
-                    // ... (existing logic for resolve-element) ...
-                    // Get fresh DOM from the current page
-                    let domContext: any | null = null;
-                    try {
-                        const response = await chrome.tabs.sendMessage(tab.id!, { type: 'EXTRACT_DOM' });
-                        if (response?.success && response?.data) {
-                            domContext = response.data;
-                            lastDom = domContext;
-                        }
-                    } catch (e: any) {
-                        console.warn('[Aeyes] Could not extract DOM:', e);
-                        // If it's just a port closed (e.g. during nav), we might want to continue blindly?
-                        // But we need DOM for resolution. If we can't get it, we can't resolve.
-                        // We will return failure for resolution, which is correct.
-                        return {
-                            success: false,
-                            failedAction: actionName,
-                            failReason: 'Could not fetch DOM for resolution: ' + (e.message || 'Unknown error')
-                        };
-                    }
-
-                    if (domContext && (action as any).description) {
-                        // Backend Resolution Call
-                        try {
-                            const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
-                            const resolveResponse = await fetch(`${backendUrl}/resolve-element`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    dom_context: domContext,
-                                    action_type: action.type,
-                                    action_description: (action as any).description,
-                                    action_value: action.value
-                                })
-                            });
-
-                            const resolved = await resolveResponse.json();
-                            if (resolved.success && resolved.element_id) {
-                                action.elementId = resolved.element_id;
-                            } else {
-                                return {
-                                    success: false,
-                                    failedAction: actionName,
-                                    failReason: `Resolution failed: ${resolved.message}`
-                                };
-                            }
-                        } catch (e) {
-                            return { success: false, failedAction: actionName, failReason: 'Backend resolution error' };
-                        }
-                    }
-                }
-
-                // Send to Content Script
-                try {
-                    const result = await chrome.tabs.sendMessage(tab.id!, { type: 'EXECUTE_ACTION', action });
-                    console.log(`[Aeyes Orchestrator] Action Result:`, result);
-
-                    if (!result || !result.success) {
-                        return {
-                            success: false,
-                            failedAction: actionName,
-                            failReason: result?.message || 'Content script error',
-                            lastDom: lastDom || undefined
-                        };
-                    }
-                } catch (e: any) {
-                    // Check if error is due to content script being unreachable
-                    const isConnectionError = e.message && (
-                        e.message.includes('message port closed') ||
-                        e.message.includes('receiving end does not exist') ||
-                        e.message.includes('Could not establish connection')
-                    );
-
-                    if (isConnectionError) {
-                        console.log('[Aeyes] Content script unreachable, attempting to inject...');
-
-                        // Try to inject content script and retry
-                        try {
-                            await chrome.scripting.executeScript({
-                                target: { tabId: tab.id! },
-                                files: ['content.js']
-                            });
-                            console.log('[Aeyes] Content script injected successfully, retrying action...');
-                            await new Promise(r => setTimeout(r, 300));
-
-                            // Retry the action after injection
-                            const retryResult = await chrome.tabs.sendMessage(tab.id!, { type: 'EXECUTE_ACTION', action });
-                            console.log(`[Aeyes Orchestrator] Retry Action Result:`, retryResult);
-
-                            if (!retryResult || !retryResult.success) {
-                                return {
-                                    success: false,
-                                    failedAction: actionName,
-                                    failReason: retryResult?.message || 'Content script error after injection',
-                                    lastDom: lastDom || undefined
-                                };
-                            }
-                        } catch (injectError: any) {
-                            // Check if this was actually a navigation happening
-                            if (injectError.message && injectError.message.includes('message port closed')) {
-                                console.log('[Aeyes] Action likely caused navigation (port closed after retry).');
-                                return { success: true, lastDom: undefined };
-                            }
-                            console.warn('[Aeyes] Failed to inject/execute:', injectError.message);
-                            return { success: false, failedAction: actionName, failReason: 'Content script unreachable. Please reload the page and try again.' };
-                        }
-                    } else {
-                        return { success: false, failedAction: actionName, failReason: 'Content script error: ' + e.message };
-                    }
-                }
-
-                // Post-Action Wait
-                await new Promise(r => setTimeout(r, 500));
-            }
-
-            console.log('[Aeyes] All actions completed successfully');
-            return { success: true, lastDom: lastDom || undefined };
-        } catch (error: any) {
-            console.error('[Aeyes] Action execution failed:', error);
-            return {
-                success: false,
-                failedAction: 'execution_error',
-                failReason: `Unexpected error: ${error.message}`
-            };
-        }
-    }, []);
+    // Execute actions wrapper - provides React callbacks to the executor
+    const executeActions = useCallback(async (actions: Action[]): Promise<ActionResult> => {
+        const callbacks: ExecutionCallbacks = {
+            onPlan,
+            onStatusChange: updateStatus,
+            stopAudio,
+            setAudioElement: (audio) => { audioElementRef.current = audio; },
+            setSpeaking: (speaking) => { speakingRef.current = speaking; },
+            getLastShownPlan: () => lastShownPlanRef.current,
+            setLastShownPlan: (plan) => { lastShownPlanRef.current = plan; }
+        };
+        return executeActionsCore(actions, callbacks);
+    }, [onPlan, updateStatus, stopAudio]);
 
     const processTranscript = useCallback(async (text: string) => {
         if (processingRef.current) return;

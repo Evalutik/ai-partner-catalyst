@@ -8,7 +8,8 @@ from dotenv import load_dotenv
 
 # Load environment variables
 env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
-load_dotenv(env_path)
+print(f"[Aeyes] Loading environment from: {env_path}")
+load_dotenv(env_path, override=True)
 
 # Google Cloud Credentials
 GOOGLE_CREDENTIALS_PATH = os.getenv(

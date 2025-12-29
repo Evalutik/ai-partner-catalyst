@@ -1,5 +1,5 @@
 /**
- * Navigation action handlers - go_back, reload, navigate
+ * Navigation Actions - Navigate, go back, reload, check restricted pages
  */
 
 export interface NavigationResult {
@@ -9,13 +9,39 @@ export interface NavigationResult {
 }
 
 /**
- * Handle navigate action - goes to a URL in current or new tab
+ * URLs that are browser-restricted (no content script access)
  */
-export async function handleNavigateAction(
+const RESTRICTED_PATTERNS = [
+    'chrome://',
+    'edge://',
+    'about:',
+    'view-source:',
+    'chrome.google.com/webstore'
+];
+
+/**
+ * Actions safe to run on restricted pages
+ */
+export const SAFE_ACTIONS_ON_RESTRICTED = [
+    'navigate', 'open_tab', 'switch_tab', 'say', 'ask', 'wait',
+    'close_tab', 'scan_page', 'notify_plan', 'go_back', 'reload'
+];
+
+/**
+ * Check if URL is a restricted browser page
+ */
+export function isRestrictedPage(url: string): boolean {
+    return RESTRICTED_PATTERNS.some(pattern => url.includes(pattern));
+}
+
+/**
+ * Navigate to URL in current or new tab
+ */
+export async function navigate(
     url: string,
     tabId: number,
     openInNewTab: boolean = false,
-    waitForPage: boolean = true
+    waitForLoad: boolean = true
 ): Promise<NavigationResult> {
     try {
         let normalizedUrl = url;
@@ -26,15 +52,14 @@ export async function handleNavigateAction(
         if (openInNewTab) {
             const newTab = await chrome.tabs.create({ url: normalizedUrl });
             return { success: true, newTab };
-        } else {
-            await chrome.tabs.update(tabId, { url: normalizedUrl });
         }
 
-        if (waitForPage) {
+        await chrome.tabs.update(tabId, { url: normalizedUrl });
+
+        if (waitForLoad) {
             await new Promise(r => setTimeout(r, 2000));
         }
 
-        // Refresh tab reference
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         return { success: true, newTab: tab };
     } catch (e: any) {
@@ -43,9 +68,9 @@ export async function handleNavigateAction(
 }
 
 /**
- * Handle go_back action - navigates to previous page in history
+ * Navigate back in history
  */
-export async function handleGoBackAction(tabId: number): Promise<NavigationResult> {
+export async function goBack(tabId: number): Promise<NavigationResult> {
     try {
         await chrome.tabs.goBack(tabId);
         await new Promise(r => setTimeout(r, 1000));
@@ -57,9 +82,9 @@ export async function handleGoBackAction(tabId: number): Promise<NavigationResul
 }
 
 /**
- * Handle reload action - refreshes the current page
+ * Reload current page
  */
-export async function handleReloadAction(tabId: number): Promise<NavigationResult> {
+export async function reload(tabId: number): Promise<NavigationResult> {
     try {
         await chrome.tabs.reload(tabId);
         await new Promise(r => setTimeout(r, 1500));
@@ -69,24 +94,3 @@ export async function handleReloadAction(tabId: number): Promise<NavigationResul
         return { success: false, message: e.message || 'Reload failed' };
     }
 }
-
-/**
- * Check if a URL is a restricted browser page
- */
-export function isRestrictedPage(url: string): boolean {
-    return (
-        url.startsWith('chrome://') ||
-        url.startsWith('edge://') ||
-        url.startsWith('about:') ||
-        url.startsWith('view-source:') ||
-        url.includes('chrome.google.com/webstore')
-    );
-}
-
-/**
- * List of action types that are safe on restricted pages
- */
-export const SAFE_ACTIONS_ON_RESTRICTED = [
-    'navigate', 'open_tab', 'switch_tab', 'say', 'ask', 'wait',
-    'close_tab', 'scan_page', 'notify_plan', 'go_back', 'reload'
-];
