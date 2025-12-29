@@ -79,7 +79,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         recognition.onresult = (event: SpeechRecognitionEvent) => {
             if (isAbortedRef.current) return;
 
-            console.log('[Speech] onresult event fired');
+            // console.log('[Speech] onresult event fired');
 
             let interim = '';
             let final = '';
@@ -93,19 +93,14 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
                     interim += result[0].transcript;
                 }
             }
-            console.log('[Speech] For loop exited');
 
             if (final) {
-                console.log('[Speech] final transcript setting');
                 setTranscript(prev => prev + final);
-                console.log('[Speech] final transcript set');
             }
-            if (interim) {
-                console.log('[Speech] Interim:', interim);
-            }
-            console.log('[Speech] interm transcript setting');
+            // if (interim) {
+            //     console.log('[Speech] Interim:', interim);
+            // }
             setInterimTranscript(interim);
-            console.log('[Speech] interm transcript set');
         };
 
         recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
