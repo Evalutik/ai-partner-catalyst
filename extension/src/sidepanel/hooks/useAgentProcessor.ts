@@ -1,9 +1,7 @@
 import { useState, useRef, useCallback, useMemo } from 'react';
-import { sendToBackend } from '../services/api';
-import { extractDOMWithRetry, capturePageContext } from '../tools/analysis';
-import { executeActions } from '../tools/actionExecutor';
 import { SpeakerState } from './useSpeaker';
 import { AgentControlRefs, AgentLoopCallbacks } from './useAgentLoop';
+import { performPerception, performCognition, performActionExecution } from '../services/agentSteps';
 
 export function useAgentProcessor(
     speaker: SpeakerState,
@@ -59,8 +57,6 @@ export function useAgentProcessor(
         let lastPlanText = lastPlanTextRef.current;
         let currentTranscript = capitalizedText;
         let finalResponseText = '';
-        let loopDomContext: any | null = null;
-        let response: any = null;
         let currentConversationId = conversationId;
 
         try {
@@ -69,14 +65,18 @@ export function useAgentProcessor(
                 stepCount++;
 
                 // 1. Perception
-                loopDomContext = await extractDOMWithRetry();
-                const pageContext = await capturePageContext();
+                const perception = await performPerception();
 
                 // Safety check for loops without vision
-                if (stepCount > 1 && !loopDomContext && !response?.actions?.length) {
-                    const isProtected = pageContext?.url?.startsWith('chrome://') || pageContext?.url?.startsWith('edge://');
-                    if (!isProtected) {
+                if (stepCount > 1 && !perception.domContext && !perception.isProtected) {
+                    // We check if previous response had actions to be fair, but here we just check raw DOM presence
+                    // If we are deep in loop and lost DOM, that's bad.
+                    // But we can rely on performCognition to handle it potentially?
+                    // Original logic: if (stepCount > 1 && !loopDomContext && !response?.actions?.length)
+                    // Let's keep it simple: if no DOM and not protected, warn.
+                    if (!perception.domContext && !perception.isProtected) {
                         console.warn('[Aeyes] Infinite loop risk: No DOM available.');
+                        // We continue, backend might handle it or we break next.
                         finalResponseText = "I can't see the page content right now. Please ensure you're on a valid web page.";
                         break;
                     }
@@ -85,20 +85,20 @@ export function useAgentProcessor(
                 if (signal.aborted) break;
 
                 // 2. Cognition (Backend)
-                response = await sendToBackend({
-                    transcript: currentTranscript,
-                    context: loopDomContext || undefined,
-                    page_context: pageContext || undefined,
-                    conversation_id: currentConversationId || undefined
-                }, signal);
+                const cognition = await performCognition(
+                    currentTranscript,
+                    perception,
+                    currentConversationId,
+                    signal
+                );
+
+                const response = cognition.response;
+                if (cognition.conversationId) {
+                    currentConversationId = cognition.conversationId;
+                    if (!conversationId) setConversationId(currentConversationId);
+                }
 
                 if (controls.stoppedManuallyRef.current) break;
-
-                // Update conversation ID
-                if (response.conversation_id) {
-                    currentConversationId = response.conversation_id;
-                    if (!conversationId) setConversationId(response.conversation_id);
-                }
 
                 // Loop Detection
                 const currentPlan = response.actions?.find((a: any) => a.type === 'notify_plan');
@@ -118,21 +118,19 @@ export function useAgentProcessor(
                 // 3. Action Execution
                 let actionResult = { success: true } as any;
                 if (response.actions && response.actions.length > 0) {
-                    actionResult = await executeActions(response.actions, {
+                    actionResult = await performActionExecution(response.actions, {
                         onPlan: callbacks.onPlan,
                         onStatusChange: callbacks.onStatusChange,
-                        speak: (t) => speaker.speak(t, signal), // Use speaker hook
+                        speak: (t) => speaker.speak(t, signal),
                         getLastShownPlan: () => lastPlanTextRef.current,
-                        setLastShownPlan: (p) => {
-                            lastPlanTextRef.current = p;
-                        }
-                    });
+                        setLastShownPlan: (p) => { lastPlanTextRef.current = p; }
+                    }, signal);
                 }
 
                 // 3b. Post-Analysis
                 if (actionResult.success && response.post_analysis && response.post_analysis.length > 0) {
                     await new Promise(r => setTimeout(r, 500));
-                    await executeActions(response.post_analysis, {
+                    await performActionExecution(response.post_analysis, {
                         speak: (t) => speaker.speak(t, signal)
                     });
                 }
@@ -167,6 +165,7 @@ export function useAgentProcessor(
             // Cleanup & Respond
             if (controls.stoppedManuallyRef.current || signal.aborted) {
                 callbacks.onStatusChange('idle');
+                resetConversation(); // Clear plan
                 setProcessingState(false);
                 return;
             }
@@ -180,27 +179,19 @@ export function useAgentProcessor(
             // Speak Final Response
             await speaker.speak(finalResponseText, signal);
 
-            if (controls.stoppedManuallyRef.current) return;
+            if (controls.stoppedManuallyRef.current) {
+                resetConversation();
+                return;
+            }
 
             // Reset for next task
             resetConversation();
 
-            // Enter Standby Mode
+            // Enter Standby (mimicking original logic)
             if (!controls.isPausedRef.current) {
                 await new Promise(r => setTimeout(r, 1000));
-
                 if (!controls.stoppedManuallyRef.current && !controls.isPausedRef.current) {
-                    // Signal standby to parent
-                    return; // Parent logic will handle standby transition if this promise resolves? 
-                    // Wait, we need to communicate "Complete" to the parent to trigger standby.
-                    // Or we can trigger standby callbacks here?
-                    // The original used `setIsStandby(true)` inside the hook.
-                    // We can return a specific result or call a callback.
-                    // Best to kept encapsulated:
-
-                    // Actually, useAgentLoop managed `isStandby`.
-                    // We should probably just return, and let useAgentLoop handle the "Active -> Standby" transition
-                    // OR pass a `onTaskComplete` callback.
+                    // Just return, useAgentLoop handles active->standby if idle
                 } else {
                     callbacks.onStatusChange('idle');
                 }
@@ -211,20 +202,16 @@ export function useAgentProcessor(
         } catch (err: any) {
             if (err?.name === 'AbortError') {
                 callbacks.onStatusChange('idle');
+                resetConversation(); // Clear plan
                 setProcessingState(false);
                 return;
             }
             console.error('[Aeyes] Process failed:', err);
             const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-
-            // Speak Error
             await speaker.speak("I'm having trouble. " + errorMsg, signal);
 
-            // Recovery: Go back to listening if not paused
             if (!controls.isPausedRef.current && !controls.stoppedManuallyRef.current) {
                 await new Promise(r => setTimeout(r, 1000));
-                // callbacks.startListening(); (Handled by parent if we just return)
-                // Actually the parent needs to know if it should go to listening or idle.
             }
             callbacks.onStatusChange('idle');
         } finally {

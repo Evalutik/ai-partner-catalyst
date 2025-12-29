@@ -123,8 +123,8 @@ export function useVoiceActivity({
                     console.log('[VoiceAgent] Watchdog: Restarting stalled recognition...');
                     onRestartListeningRef.current();
                 }
-            }, 1000); // Relaxed timeout from 500ms to 1000ms
+            }, 1000);
             return () => clearTimeout(timeout);
         }
-    }, [status, isListening, isPaused, error, agentProcessing]); // Removed callbacks from deps
+    }, [status, isListening, isPaused, error, agentProcessing]);
 }

@@ -1,9 +1,10 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useSpeechRecognition } from './hooks/useSpeechRecognition';
 import { playStartupSound, playListeningSound, playDoneSound, playMuteSound, playUnmuteSound, resumeAudioContext } from './services/audioCues';
-import { openPermissionPage } from './services/chrome';
-import LockIcon from './components/LockIcon';
-import { MicIcon, StopIcon, StopIconSmall } from './components/icons';
+// import { openPermissionPage } from './services/chrome'; // Removed: Handled by PermissionCard
+import VoiceVisualizer from './components/VoiceVisualizer';
+import VoiceControl from './components/VoiceControl';
+import PermissionCard from './components/PermissionCard';
 import { useAudioVisualization } from './hooks/useAudioVisualization';
 import { capitalizeFirst } from './services/echoFilter';
 import { useSpeaker } from './hooks/useSpeaker';
@@ -70,7 +71,8 @@ export default function VoiceAgent({
         isSupported,
         start: startListening,
         stop: stopListening,
-        abort: abortListening
+        abort: abortListening,
+        resetTranscript
     } = useSpeechRecognition();
 
     // Sync refs for robust loops
@@ -178,11 +180,28 @@ export default function VoiceAgent({
             await resumeAudioContext(); // Ensure audio is ready
             await playStartupSound();
 
+            // Check before speaking
+            if (stoppedManuallyRef.current) return;
+
             await speaker.speak("Hi, I'm Aeyes. How can I help you?");
+
+            // Check if user stopped while speaking
+            if (stoppedManuallyRef.current) return;
 
             await playDoneSound();
 
+            // Critical check: don't start listening if user pressed stop during greeting
+            if (stoppedManuallyRef.current) return;
+
             const success = await startAudioVisualization();
+
+            // Re-check after async startVisualization (though it should be fast)
+            if (stoppedManuallyRef.current) {
+                stopAudioVisualization();
+                updateStatus('idle');
+                return;
+            }
+
             if (success) {
                 await playListeningSound();
                 updateStatus('listening');
@@ -193,7 +212,7 @@ export default function VoiceAgent({
         } catch (e) {
             updateStatus('idle');
         }
-    }, [hasGreeted, updateStatus, startListening, startAudioVisualization, speaker]);
+    }, [hasGreeted, updateStatus, startListening, startAudioVisualization, stopAudioVisualization, speaker]);
 
     // Auto-start
     useEffect(() => {
@@ -247,6 +266,7 @@ export default function VoiceAgent({
 
         if (isCurrentlyInactive) {
             // Resume
+            // For start, we can play sound first as feedback
             await resumeAudioContext(); // Resuming
             await playUnmuteSound();
             setIsPaused(false);
@@ -255,90 +275,47 @@ export default function VoiceAgent({
             startListening();
             updateStatus('listening');
         } else {
-            // Pause/Stop
-            await playMuteSound();
+            // Pause/Stop - EXECUTE INSTANTLY
+            stoppedManuallyRef.current = true;
             setIsPaused(true);
             agentLoop.setStandby(false);
-            stoppedManuallyRef.current = true;
 
             agentLoop.cancelRequests();
             speaker.stopAudio();
             stopListening();
-
+            resetTranscript(); // Clear residual text to prevent echo processing
             updateStatus('idle');
+
+            // Feedback sound last (or parallel, but don't block state)
+            playMuteSound();
         }
     }, [isPaused, agentLoop, startListening, stopListening, speaker, updateStatus]);
 
     if (!isSupported) return <div className="error-text">Speech recognition not supported</div>;
-
-    const isActive = status !== 'idle';
-    const getStateColor = () => {
-        switch (status) {
-            case 'listening': return 'var(--color-listening)';
-            case 'processing': return 'var(--color-processing)';
-            case 'speaking': return 'var(--color-speaking)';
-            default: return 'var(--color-idle)';
-        }
-    };
 
     const isIdleMode = isPaused || agentLoop.isStandby;
 
     return (
         <div className="flex flex-col gap-3">
             {/* Audio Visualizer */}
-            <div className="flex items-end justify-center gap-0.5 h-8">
-                {audioLevel.map((level, i) => (
-                    <div
-                        key={i}
-                        className="audio-bar"
-                        style={{
-                            height: `${Math.max(12, level * 100)}%`,
-                            background: isActive ? getStateColor() : 'var(--color-idle)',
-                            opacity: isActive ? 0.8 : 0.3
-                        }}
-                    />
-                ))}
-            </div>
+            <VoiceVisualizer
+                audioLevel={audioLevel}
+                status={status}
+                isPaused={isPaused}
+            />
 
             {/* Toggle Button */}
             {!needsPermission && (
-                <button
-                    onClick={handlePauseToggle}
-                    className={`btn-voice ${isIdleMode ? 'btn-voice-idle' : `btn-voice-${status}`}`}
-                    aria-label={isIdleMode ? 'Start listening' : status === 'processing' ? 'Stop processing' : 'Stop listening'}
-                >
-                    {isIdleMode ? (
-                        <MicIcon />
-                    ) : status === 'processing' ? (
-                        <div className="spinner-wrapper">
-                            <div className="spinner-ring" />
-                            <StopIconSmall />
-                        </div>
-                    ) : (
-                        <StopIcon />
-                    )}
-                    <span>{isIdleMode ? 'Start' : status === 'processing' ? 'Processing...' : 'Stop'}</span>
-                </button>
+                <VoiceControl
+                    status={status}
+                    isIdleMode={isIdleMode}
+                    onToggle={handlePauseToggle}
+                />
             )}
 
             {/* Permission Card */}
             {needsPermission && (
-                <div className="permission-card animate-fade-in">
-                    <div className="mb-3 text-center"><LockIcon /></div>
-                    <h3 className="text-sm font-semibold mb-2" style={{ color: 'var(--color-text-primary)' }}>
-                        Microphone Access Needed
-                    </h3>
-                    <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)', lineHeight: '1.5' }}>
-                        Please allow microphone access to use voice commands.
-                    </p>
-                    <button
-                        onClick={openPermissionPage}
-                        className="permission-btn w-full justify-center"
-                        style={{ background: '#E2E2E2', color: '#060606' }}
-                    >
-                        Open Permission Settings
-                    </button>
-                </div>
+                <PermissionCard />
             )}
 
             {/* Error Display */}
@@ -348,3 +325,4 @@ export default function VoiceAgent({
         </div>
     );
 }
+

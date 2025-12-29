@@ -10,6 +10,7 @@ export interface UseSpeechRecognitionResult {
     start: () => void;
     stop: () => void;
     abort: () => void;
+    resetTranscript: () => void;
 }
 
 export function useSpeechRecognition(): UseSpeechRecognitionResult {
@@ -70,6 +71,11 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         engineRef.current?.abort();
     }, []);
 
+    const resetTranscript = useCallback(() => {
+        setTranscript('');
+        setInterimTranscript('');
+    }, []);
+
     return {
         isListening,
         transcript,
@@ -79,6 +85,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         start,
         stop,
         abort,
+        resetTranscript
     };
 }
 
