@@ -5,9 +5,10 @@ import { openPermissionPage } from './services/chrome';
 import LockIcon from './components/LockIcon';
 import { MicIcon, StopIcon, StopIconSmall } from './components/icons';
 import { useAudioVisualization } from './hooks/useAudioVisualization';
-import { isEchoOfSpokenText, capitalizeFirst } from './services/echoFilter';
+import { capitalizeFirst } from './services/echoFilter';
 import { useSpeaker } from './hooks/useSpeaker';
 import { useAgentLoop } from './hooks/useAgentLoop';
+import { useVoiceActivity } from './hooks/useVoiceActivity';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
 
@@ -46,7 +47,6 @@ export default function VoiceAgent({
     const isPausedRef = useRef(isPaused);
     const stoppedManuallyRef = useRef(false);
     const hasGreetedRef = useRef(false);
-    const lastSpeechTimeRef = useRef<number>(Date.now());
     const transcriptRef = useRef<string>('');
 
     // 1. Audio Visualization
@@ -203,100 +203,30 @@ export default function VoiceAgent({
         }
     }, [autoStart, hasAttemptedAutoStart, isSupported, playGreeting]);
 
-    const prevTextRef = useRef('');
-
-    // Buffer to hold the last valid text in case recognition resets (e.g. no-speech or auto-restart)
-    const lastSeenTextRef = useRef('');
-
-    // Input Processing Logic
+    // Streaming Transcript Update
     useEffect(() => {
         // Guard: Don't listen if processing or speaking
-        if (statusRef.current === 'processing' || statusRef.current === 'speaking' || agentLoop.processing || speaker.speakingRef.current) return;
+        if (status === 'processing' || status === 'speaking' || agentLoop.processing || speaker.speakingRef.current) return;
 
         const fullCurrentText = (transcript + interimTranscript).trim();
 
         onStreamingTranscript?.(fullCurrentText ? capitalizeFirst(fullCurrentText) : '');
-
-        // Update activity timestamp ONLY whenever text changes content
-        if (fullCurrentText && fullCurrentText !== prevTextRef.current) {
-            lastSpeechTimeRef.current = Date.now();
-            prevTextRef.current = fullCurrentText;
-            lastSeenTextRef.current = fullCurrentText; // Update buffer
-        } else if (!fullCurrentText) {
-            prevTextRef.current = '';
-            // Do NOT clear lastSeenTextRef here.
-        }
     }, [transcript, interimTranscript, onStreamingTranscript, status, agentLoop, speaker]);
 
-    // Robust Silence Detection Loop (Independent of Renders)
-    useEffect(() => {
-        // Optimization: Only run silence check interval when we are actually listening
-        if (status !== 'listening') return;
 
-        let tick = 0;
-        const checkSilence = async () => {
-            tick++;
-
-            // Extra safety guards (though effect should cleanup on status change)
-            if (agentLoop.processing || speaker.speakingRef.current) {
-                return;
-            }
-
-            // Check if we have text to process
-            // Use buffered text if transcript is empty (handled the case where it was wiped by restart)
-            let textToProcess = transcriptRef.current?.trim();
-            if (!textToProcess) {
-                textToProcess = lastSeenTextRef.current?.trim();
-            }
-
-            if (!textToProcess) {
-                return;
-            }
-
-            const now = Date.now();
-            const timeSinceSpeech = now - lastSpeechTimeRef.current;
-
-            if (timeSinceSpeech > 1000) {
-                // SIlence detected
-                console.log(`[VoiceAgent] Silence detected (${timeSinceSpeech}ms). Processing: "${textToProcess}"`);
-
-                // Reset timestamp IMMEDIATELY to prevent double-firing
-                lastSpeechTimeRef.current = Date.now();
-
-                // Echo check logic moved here
-                const spoken = speaker.lastSpokenTextRef.current;
-                if (spoken && textToProcess && isEchoOfSpokenText(textToProcess, spoken)) {
-                    console.log('[Aeyes] Ignored self-hearing (final):', textToProcess);
-                    startListening(); // Restart to clear
-                    lastSeenTextRef.current = ''; // Clear buffer since we consumed it (as echo)
-                    return;
-                }
-
-                await playDoneSound();
-
-                // Clear the buffer right before processing
-                lastSeenTextRef.current = '';
-                await agentLoop.processTranscript(textToProcess);
-            }
-        };
-
-        const interval = setInterval(checkSilence, 200);
-        return () => clearInterval(interval);
-    }, [status, agentLoop, speaker, startListening]); // Stable deps
-
-    // Watchdog
-    useEffect(() => {
-        if (status === 'listening' && !isListening && !isPaused && !error && !agentLoop.processing) {
-            const timeout = setTimeout(() => {
-                // Double check if we are still in "should be listening" state
-                if (status === 'listening' && !isListening && !isPaused && !error) {
-                    console.log('[VoiceAgent] Watchdog: Restarting stalled recognition...');
-                    startListening();
-                }
-            }, 1000); // Relaxed timeout from 500ms to 1000ms
-            return () => clearTimeout(timeout);
-        }
-    }, [status, isListening, isPaused, error, startListening, agentLoop.processing]);
+    // 5. Voice Activity Management (Silence Detection + Watchdog)
+    useVoiceActivity({
+        status,
+        isListening,
+        isPaused,
+        error,
+        transcript,
+        agentProcessing: agentLoop.processing,
+        speakerSpeaking: speaker.speakingRef.current,
+        lastSpokenText: speaker.lastSpokenTextRef.current,
+        onProcess: agentLoop.processTranscript,
+        onRestartListening: startListening
+    });
 
     // Permission Check
     useEffect(() => {
