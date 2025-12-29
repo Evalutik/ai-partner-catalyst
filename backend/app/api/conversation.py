@@ -62,13 +62,13 @@ async def conversation(request: ConversationRequest):
             )
         
         if request.context:
-            context_str += f"\nDOM ELEMENTS/DATA:\n{json_lib.dumps(request.context, indent=2)}\n"
+            context_str += f"\nCLUSTERED DOM (interactive elements):\n{json_lib.dumps(request.context, indent=2)}\n"
 
         prompt = (
             f'User request: "{user_text}"\n'
             f'{history_text}\n'
             f'{context_str}\n\n'
-            f'Analyze the request and context. Respond with JSON based on the System Protocol.'
+            f'Analyze the request and clustered DOM. Respond with JSON based on the System Protocol.'
         )
 
         # Build full prompt with system instructions

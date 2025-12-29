@@ -1,5 +1,5 @@
 // Content script - injected into web pages for DOM extraction and action execution
-import { extractDOM, scanPage } from './tools/analysis/dom';
+import { extractDOM, extractClusteredDOM, scanPage } from './tools/analysis/dom';
 import { getPageStatus } from './tools/analysis/pageStatus';
 import { executeAction } from './tools/actionExecutor';
 import { Action } from './types';
@@ -17,8 +17,16 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (message.type === 'EXTRACT_DOM') {
+            const clusteredDom = extractClusteredDOM();
+            sendResponse({
+                success: true,
+                data: clusteredDom
+            });
+            return true;
+        }
+
+        if (message.type === 'EXTRACT_DOM_LEGACY') {
             const dom = extractDOM();
-            // Sidepanel expects { success: true, data: DOMSnapshot }
             sendResponse({
                 success: true,
                 data: dom
@@ -42,6 +50,7 @@ chrome.runtime.onMessage.addListener(
 
 // Global exposure for debugging
 (window as any).extractDOM = extractDOM;
+(window as any).extractClusteredDOM = extractClusteredDOM;
 (window as any).scanPage = scanPage;
 (window as any).getPageStatus = getPageStatus;
 (window as any).executeAction = executeAction;
