@@ -14,6 +14,8 @@ interface UseAgentControlsProps {
     isPaused: boolean;
     setIsPaused: (val: boolean) => void;
     stoppedManuallyRef: MutableRefObject<boolean>;
+    hasGreeted: boolean;
+    playGreeting: () => Promise<void>;
 }
 
 export function useAgentControls({
@@ -25,20 +27,31 @@ export function useAgentControls({
     updateStatus,
     isPaused,
     setIsPaused,
-    stoppedManuallyRef
+    stoppedManuallyRef,
+    hasGreeted,
+    playGreeting
 }: UseAgentControlsProps) {
     const handlePauseToggle = useCallback(async () => {
-        const isCurrentlyInactive = isPaused || agentLoop.isStandby;
+        // Include !hasGreeted so clicking Start triggers greeting when not yet greeted
+        const isCurrentlyInactive = isPaused || agentLoop.isStandby || !hasGreeted;
 
         if (isCurrentlyInactive) {
-            // Resume
+            // Resume or Start
             await resumeAudioContext();
-            await playUnmuteSound();
+
+            if (!hasGreeted) {
+                // First time starting - play greeting
+                await playGreeting();
+            } else {
+                // Resuming from pause
+                await playUnmuteSound();
+                startListening();
+                updateStatus('listening');
+            }
+
             setIsPaused(false);
             agentLoop.setStandby(false);
             stoppedManuallyRef.current = false;
-            startListening();
-            updateStatus('listening');
         } else {
             // Pause/Stop
             stoppedManuallyRef.current = true;
@@ -53,7 +66,7 @@ export function useAgentControls({
 
             playMuteSound();
         }
-    }, [isPaused, agentLoop, startListening, stopListening, speaker, resetTranscript, updateStatus, setIsPaused, stoppedManuallyRef]);
+    }, [isPaused, hasGreeted, agentLoop, startListening, stopListening, speaker, resetTranscript, updateStatus, setIsPaused, stoppedManuallyRef, playGreeting]);
 
     return {
         handlePauseToggle

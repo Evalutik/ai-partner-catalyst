@@ -118,7 +118,28 @@ export default function VoiceAgent({
         agentControlsRefs
     );
 
-    // 6. Agent Controls (Pause/Resume logic)
+    // 6. Permission Management (must come before greeting to check mic access first)
+    const onPermissionUpdate = useCallback((needsAccess: boolean) => {
+        onPermissionRequired?.(needsAccess);
+    }, [onPermissionRequired]);
+
+    const { needsPermission, wasGrantedInitially } = useAgentPermissions(onPermissionUpdate);
+
+    // 7. Greeting Logic (depends on permission state)
+    // Auto-start is handled inside useAgentGreeting ONLY when permission was already granted on load
+    const { hasGreeted, playGreeting } = useAgentGreeting({
+        speaker,
+        startListening,
+        startAudioVisualization,
+        stopAudioVisualization,
+        updateStatus,
+        autoStart: autoStart && wasGrantedInitially, // Only auto-start if permission was already granted
+        isSupported,
+        stoppedManuallyRef,
+        needsPermission
+    });
+
+    // 8. Agent Controls (Pause/Resume logic - depends on greeting state)
     const { handlePauseToggle } = useAgentControls({
         agentLoop,
         speaker,
@@ -128,31 +149,10 @@ export default function VoiceAgent({
         updateStatus,
         isPaused,
         setIsPaused,
-        stoppedManuallyRef
+        stoppedManuallyRef,
+        hasGreeted,
+        playGreeting
     });
-
-    // 7. Greeting Logic
-    const { playGreeting } = useAgentGreeting({
-        speaker,
-        startListening,
-        startAudioVisualization,
-        stopAudioVisualization,
-        updateStatus,
-        autoStart,
-        isSupported,
-        stoppedManuallyRef
-    });
-
-    // 8. Permission Management
-    const onPermissionUpdate = useCallback((isDenied: boolean) => {
-        onPermissionRequired?.(isDenied);
-        // Retry greeting if permission becomes available and we haven't greeted yet
-        if (!isDenied) {
-            playGreeting();
-        }
-    }, [onPermissionRequired, playGreeting]);
-
-    const { needsPermission } = useAgentPermissions(onPermissionUpdate);
 
 
     // Error Handling
@@ -202,7 +202,8 @@ export default function VoiceAgent({
 
     if (!isSupported) return <div className="error-text">Speech recognition not supported</div>;
 
-    const isIdleMode = isPaused || agentLoop.isStandby;
+    // Show Start button if paused, in standby, OR greeting hasn't happened yet
+    const isIdleMode = isPaused || agentLoop.isStandby || !hasGreeted;
 
     return (
         <div className="flex flex-col gap-3">

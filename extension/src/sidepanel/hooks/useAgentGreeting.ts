@@ -12,6 +12,7 @@ interface UseAgentGreetingProps {
     autoStart?: boolean;
     isSupported: boolean;
     stoppedManuallyRef: MutableRefObject<boolean>;
+    needsPermission: boolean;
 }
 
 export function useAgentGreeting({
@@ -22,7 +23,8 @@ export function useAgentGreeting({
     updateStatus,
     autoStart = false,
     isSupported,
-    stoppedManuallyRef
+    stoppedManuallyRef,
+    needsPermission
 }: UseAgentGreetingProps) {
     const [hasGreeted, setHasGreeted] = useState(false);
     const hasGreetedRef = useRef(false);
@@ -75,13 +77,13 @@ export function useAgentGreeting({
         }
     }, [updateStatus, startListening, startAudioVisualization, stopAudioVisualization, speaker, stoppedManuallyRef]);
 
-    // Auto-start logic
+    // Auto-start logic - only if permission is granted
     useEffect(() => {
-        if (autoStart && !hasAttemptedAutoStart && isSupported) {
+        if (autoStart && !hasAttemptedAutoStart && isSupported && !needsPermission) {
             setHasAttemptedAutoStart(true);
             setTimeout(() => playGreeting(), 500);
         }
-    }, [autoStart, hasAttemptedAutoStart, isSupported, playGreeting]);
+    }, [autoStart, hasAttemptedAutoStart, isSupported, needsPermission, playGreeting]);
 
     return {
         playGreeting,
