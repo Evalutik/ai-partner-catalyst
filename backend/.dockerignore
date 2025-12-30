@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+service-account-key.json
+*.log
+.git/
+.gitignore
+.vscode/
+.idea/
+*.md
+dev.sh
