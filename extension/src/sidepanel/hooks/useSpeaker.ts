@@ -1,5 +1,4 @@
 import { useRef, useCallback, useMemo, useEffect } from 'react';
-import { getAudioUrl } from '../services/api';
 
 export interface SpeakerCallbacks {
     onStatusChange?: (status: 'speaking' | 'processing' | 'idle' | 'listening') => void;
@@ -27,8 +26,9 @@ export function useSpeaker(callbacks: SpeakerCallbacks): SpeakerState {
 
     const stopAudio = useCallback(() => {
         if (audioElementRef.current) {
+            console.log('[UseSpeaker] Stopping current audio');
             audioElementRef.current.pause();
-            audioElementRef.current.currentTime = 0;
+            audioElementRef.current.src = '';
             audioElementRef.current = null;
         }
         speakingRef.current = false;
@@ -36,6 +36,9 @@ export function useSpeaker(callbacks: SpeakerCallbacks): SpeakerState {
 
     const speak = useCallback(async (text: string, signal?: AbortSignal) => {
         if (!text) return;
+
+        // NEW: Implement Interruption - STOP old speech immediately when new speech starts
+        stopAudio();
 
         try {
             // Update state
@@ -48,77 +51,51 @@ export function useSpeaker(callbacks: SpeakerCallbacks): SpeakerState {
             // Notify UI
             callbacksRef.current.onResponse?.(text);
 
-            console.log('[UseSpeaker] Fetching audio for:', text.substring(0, 20) + '...');
-            // Fetch audio
-            const audioUrl = await getAudioUrl(text, signal);
-            console.log('[UseSpeaker] Audio URL fetched');
+            const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+            const audioUrl = `${BACKEND_URL}/speak?text=${encodeURIComponent(text)}`;
 
-            // Check if aborted during fetch
-            if (signal?.aborted || !speakingRef.current) {
-                console.log('[UseSpeaker] Speak aborted/stopped after fetch');
-                speakingRef.current = false;
-                callbacksRef.current.onStatusChange?.('idle');
-                return;
-            }
+            console.log('[UseSpeaker] Playing streaming audio from:', audioUrl);
 
             const audio = new Audio(audioUrl);
             audioElementRef.current = audio;
 
-            console.log('[UseSpeaker] Playing audio...');
-            // Play and wait
             await new Promise<void>((resolve) => {
                 let resolved = false;
                 const finish = (reason: string) => {
                     if (resolved) return;
                     resolved = true;
                     console.log(`[UseSpeaker] Audio finished: ${reason}`);
-                    // Cleanup listeners to avoid leaks
                     audio.onended = null;
                     audio.onerror = null;
                     audio.onpause = null;
-                    audio.ontimeupdate = null;
                     resolve();
                 };
 
-                audio.onended = () => finish('onended');
+                const onAbort = () => {
+                    audio.pause();
+                    audio.src = '';
+                    finish('aborted');
+                };
+
+                signal?.addEventListener('abort', onAbort);
+
+                audio.onended = () => {
+                    signal?.removeEventListener('abort', onAbort);
+                    finish('onended');
+                };
                 audio.onerror = (e) => {
+                    signal?.removeEventListener('abort', onAbort);
                     console.error('[UseSpeaker] Audio element error:', e);
                     finish('error');
                 };
                 audio.onpause = () => {
-                    // Only consider pause as finish if we are NOT at the beginning (auto-pause on start?)
-                    // Actually, manual stop calls pause.
-                    // If audio is paused by system, we should probably stop?
-                    // But let's verify if duration > 0 and not ended
-                    if (audio.currentTime > 0 && !audio.ended && !audio.paused) {
-                        // Spurious pause?
-                    } else {
-                        finish('paused');
-                    }
+                    // Pause can happen due to interruption (stopAudio) or system.
+                    // If we are still "speakingRef", it's probably an interruption.
+                    finish('paused');
                 };
 
-                // Safety: Poll for completion in case events are missed
-                const checkInterval = setInterval(() => {
-                    if (resolved) {
-                        clearInterval(checkInterval);
-                        return;
-                    }
-                    if (audio.ended) {
-                        finish('polling_ended');
-                        clearInterval(checkInterval);
-                    }
-                    // Optional: Check if stalled?
-                }, 200);
-
-                // Safety: Audio metadata loaded
-                audio.onloadedmetadata = () => {
-                    console.log(`[UseSpeaker] Audio duration: ${audio.duration}s`);
-                    // If duration is Infinity or NaN, safeguard?
-                };
-
-                audio.play().then(() => {
-                    // Play started
-                }).catch((e) => {
+                audio.play().catch((e) => {
+                    signal?.removeEventListener('abort', onAbort);
                     console.warn('[UseSpeaker] Play failed:', e);
                     finish('play_failed');
                 });
@@ -132,7 +109,7 @@ export function useSpeaker(callbacks: SpeakerCallbacks): SpeakerState {
             audioElementRef.current = null;
             speakingRef.current = false;
         }
-    }, []); // Empty dependency array! Stable forever.
+    }, [stopAudio]);
 
     return useMemo(() => ({
         audioElementRef,

@@ -138,7 +138,7 @@ export function useAgentProcessor(
 
                 // 5. Follow Up
                 if (response.requiresFollowUp) {
-                    if (response.actions?.length) await new Promise(r => setTimeout(r, 1500));
+                    if (response.actions?.length) await new Promise(r => setTimeout(r, 500));
                     currentTranscript = "[Continue - analyze the current page and complete the task]";
                     continue;
                 }
@@ -171,7 +171,7 @@ export function useAgentProcessor(
 
             // Enter Standby (mimicking original logic)
             if (!controls.isPausedRef.current) {
-                await new Promise(r => setTimeout(r, 1000));
+                await new Promise(r => setTimeout(r, 300));
                 if (!controls.stoppedManuallyRef.current && !controls.isPausedRef.current) {
                     // Just return, useAgentLoop handles active->standby if idle
                 } else {

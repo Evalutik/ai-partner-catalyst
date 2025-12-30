@@ -159,14 +159,18 @@ export default function VoiceAgent({
     useEffect(() => {
         if (speechError) {
             console.log('[VoiceAgent] Speech error:', speechError);
-            if (speechError.includes('permission denied') || speechError.includes('not-allowed')) {
+            const isPermissionError = speechError.includes('permission') ||
+                speechError.includes('not-allowed') ||
+                speechError.includes('audio-capture');
+
+            if (isPermissionError) {
                 onPermissionRequired?.(true);
-            }
-            if (speechError !== 'no-speech') {
-                setError(speechError);
-            }
-            if (speechError.includes('permission') || speechError.includes('not-allowed') || speechError.includes('audio-capture')) {
                 updateStatus('idle');
+                // Do NOT set the general error state for permission issues
+                // as the PermissionCard is already shown
+                setError(null);
+            } else if (speechError !== 'no-speech') {
+                setError(speechError);
             }
         }
     }, [speechError, updateStatus, onPermissionRequired]);
@@ -221,7 +225,9 @@ export default function VoiceAgent({
             )}
 
             {needsPermission && (
-                <PermissionCard />
+                <PermissionCard
+                    onRetry={() => startAudioVisualization()}
+                />
             )}
 
             {error && !needsPermission && (

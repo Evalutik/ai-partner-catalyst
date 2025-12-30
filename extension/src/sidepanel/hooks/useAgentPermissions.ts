@@ -10,9 +10,11 @@ export function useAgentPermissions(
 
         navigator.permissions.query({ name: 'microphone' as PermissionName }).then((permissionStatus) => {
             const check = () => {
-                const denied = permissionStatus.state === 'denied';
-                setNeedsPermission(denied);
-                onPermissionRequired?.(denied);
+                // If state is 'prompt', we also want to show the PermissionCard (so user can click button)
+                // instead of showing idle state without a clear way to enable it.
+                const isNotGranted = permissionStatus.state !== 'granted';
+                setNeedsPermission(isNotGranted);
+                onPermissionRequired?.(isNotGranted);
             };
             check();
             permissionStatus.onchange = check;

@@ -16,6 +16,12 @@ class PageContext(BaseModel):
 class Action(BaseModel):
     """Single action to be executed by the frontend."""
     type: str
+    elementId: str | None = None
+    value: str | None = None
+    waitForPage: bool | None = None
+    needsDom: bool | None = None
+    description: str | None = None
+    tabId: int | None = None
     args: dict = {}
 
 

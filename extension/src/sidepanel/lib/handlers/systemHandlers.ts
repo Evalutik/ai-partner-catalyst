@@ -14,7 +14,8 @@ export const systemHandler: ActionHandler = {
                 console.log('[Aeyes Plan]', planText);
                 callbacks.setLastShownPlan?.(planText);
                 callbacks.onPlan?.(planText);
-                await new Promise(r => setTimeout(r, 500));
+                // Proactive Speech: Start speaking immediately without awaiting!
+                callbacks.speak?.(planText).catch(e => console.warn('[Aeyes] Proactive speech failed:', e));
             }
         }
         return { success: true };

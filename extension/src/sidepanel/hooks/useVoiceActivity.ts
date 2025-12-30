@@ -87,7 +87,7 @@ export function useVoiceActivity({
             const now = Date.now();
             const timeSinceSpeech = now - lastSpeechTimeRef.current;
 
-            if (timeSinceSpeech > 1000) {
+            if (timeSinceSpeech > 700) {
                 // Silence detected
                 console.log(`[VoiceAgent] Silence detected (${timeSinceSpeech}ms). Processing: "${textToProcess}"`);
 

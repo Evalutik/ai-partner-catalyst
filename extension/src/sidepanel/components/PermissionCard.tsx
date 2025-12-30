@@ -2,11 +2,13 @@ import React from 'react';
 import LockIcon from './LockIcon';
 import { openPermissionPage } from '../services/chrome';
 
+
 interface PermissionCardProps {
     onOpenSettings?: () => void; // Optional override, defaults to openPermissionPage
+    onRetry?: () => void;
 }
 
-export default function PermissionCard({ onOpenSettings = openPermissionPage }: PermissionCardProps) {
+export default function PermissionCard({ onOpenSettings = openPermissionPage, onRetry }: PermissionCardProps) {
     return (
         <div className="permission-card animate-fade-in">
             <div className="mb-3 text-center"><LockIcon /></div>
@@ -16,6 +18,17 @@ export default function PermissionCard({ onOpenSettings = openPermissionPage }: 
             <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)', lineHeight: '1.5' }}>
                 Please allow microphone access to use voice commands.
             </p>
+
+            {onRetry && (
+                <button
+                    onClick={onRetry}
+                    className="permission-btn w-full justify-center mb-2"
+                    style={{ background: 'var(--color-primary)', color: 'white' }}
+                >
+                    Enable Microphone
+                </button>
+            )}
+
             <button
                 onClick={onOpenSettings}
                 className="permission-btn w-full justify-center"
@@ -26,3 +39,4 @@ export default function PermissionCard({ onOpenSettings = openPermissionPage }: 
         </div>
     );
 }
+

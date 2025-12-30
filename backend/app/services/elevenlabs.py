@@ -7,7 +7,7 @@ from app.config import get_elevenlabs_api_key
 async def generate_speech(text: str, voice_id: str = "21m00Tcm4TlvDq8ikWAM", model_id: str = "eleven_turbo_v2_5"):
     """
     Convert text to speech using ElevenLabs API.
-    Returns audio data as bytes.
+    Returns an iterator of audio chunks for streaming.
     """
     api_key = get_elevenlabs_api_key()
     if not api_key:
@@ -17,16 +17,13 @@ async def generate_speech(text: str, voice_id: str = "21m00Tcm4TlvDq8ikWAM", mod
         from elevenlabs import ElevenLabs
         client = ElevenLabs(api_key=api_key)
         
-        # Generate audio
-        audio_generator = client.text_to_speech.convert(
+        # Generate audio iterator
+        return client.text_to_speech.convert(
             voice_id=voice_id,
             text=text,
             model_id=model_id,
             output_format="mp3_44100_128",
         )
-        
-        # Collect audio chunks
-        return b"".join(audio_generator)
         
     except ImportError:
         raise ImportError("ElevenLabs package not installed. Run: pip install elevenlabs")

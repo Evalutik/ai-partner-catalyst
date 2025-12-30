@@ -53,20 +53,39 @@ export function useAgentGreeting({
             // Critical check: don't start listening if user pressed stop during greeting
             if (stoppedManuallyRef.current) return;
 
-            const success = await startAudioVisualization();
-
-            // Re-check after async startVisualization
-            if (stoppedManuallyRef.current) {
-                stopAudioVisualization();
-                updateStatus('idle');
-                return;
+            // Check permission before auto-starting visualization to avoid "NotAllowedError"
+            // if permission is in 'prompt' state (requires user gesture)
+            let permissionGranted = false;
+            try {
+                if (navigator.permissions && navigator.permissions.query) {
+                    const status = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+                    permissionGranted = status.state === 'granted';
+                }
+            } catch (e) {
+                // Fallback for browsers that might not support the query or 'microphone' name strictly
+                console.warn('Could not query permission state:', e);
             }
 
-            if (success) {
-                await playListeningSound();
-                updateStatus('listening');
-                startListening();
+            if (permissionGranted) {
+                const success = await startAudioVisualization();
+
+                // Re-check after async startVisualization
+                if (stoppedManuallyRef.current) {
+                    stopAudioVisualization();
+                    updateStatus('idle');
+                    return;
+                }
+
+                if (success) {
+                    await playListeningSound();
+                    updateStatus('listening');
+                    startListening();
+                } else {
+                    updateStatus('idle');
+                }
             } else {
+                // If not granted, just go to idle. User can manually click "Enable Microphone" or "Start"
+                console.log('[AgentGreeting] Permission not granted yet, skipping auto-start.');
                 updateStatus('idle');
             }
         } catch (e) {

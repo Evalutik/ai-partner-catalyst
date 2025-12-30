@@ -11,17 +11,20 @@ from app.services import elevenlabs as tts_service
 router = APIRouter()
 
 
+@router.get("/speak")
 @router.post("/speak")
-async def speak(request: SpeakRequest):
+async def speak(request_or_text: SpeakRequest | str):
     """
     Convert text to speech using ElevenLabs API.
     Returns audio stream.
+    Supports both POST with JSON body and GET with text query param.
     """
     try:
-        audio_data = await tts_service.generate_speech(request.text)
+        text = request_or_text.text if isinstance(request_or_text, SpeakRequest) else request_or_text
+        audio_stream = await tts_service.generate_speech(text)
         
         return StreamingResponse(
-            iter([audio_data]),
+            audio_stream,
             media_type="audio/mpeg",
             headers={"Content-Disposition": "inline; filename=speech.mp3"}
         )

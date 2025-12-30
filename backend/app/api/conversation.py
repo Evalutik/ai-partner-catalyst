@@ -97,7 +97,17 @@ async def conversation(request: ConversationRequest):
         if raw_actions:
             for act in raw_actions:
                 if isinstance(act, dict) and "type" in act:
-                    valid_actions.append(Action(type=act["type"], args=act.get("args", {})))
+                    # Pass all known fields to the Action constructor
+                    valid_actions.append(Action(
+                        type=act["type"],
+                        elementId=act.get("elementId"),
+                        value=act.get("value"),
+                        waitForPage=act.get("waitForPage"),
+                        needsDom=act.get("needsDom"),
+                        description=act.get("description"),
+                        tabId=act.get("tabId"),
+                        args=act.get("args", {})
+                    ))
 
         # Normalize post_analysis to list of Action objects
         valid_post_analysis = []
