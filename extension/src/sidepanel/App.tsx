@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import VoiceAgent from './VoiceAgent';
-import AnimatedMessage from './AnimatedMessage';
+import PlanViewer from './components/PlanViewer';
+import ChatList from './components/ChatList';
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking';
 
@@ -12,8 +13,8 @@ interface Message {
 export default function App() {
     const [status, setStatus] = useState<Status>('idle');
     const [messages, setMessages] = useState<Message[]>([]);
+    const [currentPlan, setCurrentPlan] = useState<string | null>(null); // Current active plan
     const [autoStarted, setAutoStarted] = useState(false);
-    const messagesTopRef = useRef<HTMLDivElement>(null);
 
     const [streamingText, setStreamingText] = useState('');
     const [reloadKey, setReloadKey] = useState(0);
@@ -27,6 +28,7 @@ export default function App() {
             if (message.type === 'RELOAD_CONVERSATION') {
                 // Clear messages and reload VoiceAgent
                 setMessages([]);
+                setCurrentPlan(null);
                 setStreamingText('');
                 setAutoStarted(false);
                 setReloadKey(prev => prev + 1);
@@ -46,10 +48,16 @@ export default function App() {
         setMessages(prev => [...prev, { type: 'agent', text }]);
     };
 
-    const [permissionRequired, setPermissionRequired] = useState(false);
+    const handlePlan = (text: string) => {
+        // Replace current plan (not append)
+        setCurrentPlan(text);
+    };
 
-    // Reversed messages - newest first
-    const reversedMessages = [...messages].reverse();
+    const handleClearPlan = () => {
+        setCurrentPlan(null);
+    };
+
+    const [permissionRequired, setPermissionRequired] = useState(false);
 
     return (
         <div className="h-full flex flex-col p-4 gap-3 overflow-hidden">
@@ -66,6 +74,8 @@ export default function App() {
                     onTranscript={handleTranscript}
                     onStreamingTranscript={setStreamingText}
                     onResponse={handleResponse}
+                    onPlan={handlePlan}
+                    onClearPlan={handleClearPlan}
                     autoStart={!autoStarted}
                     onAutoStartComplete={() => setAutoStarted(true)}
                     status={status}
@@ -73,51 +83,17 @@ export default function App() {
                 />
             </section>
 
-            {/* Messages - NEW at top, OLD goes down */}
-            <section className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                {(messages.length > 0 || streamingText) ? (
-                    <div className="flex-1 overflow-y-auto pr-1 scrollbar-thin">
-                        <div ref={messagesTopRef} />
-
-                        {/* Streaming Message (Newest, appearing at top) */}
-                        {streamingText && (
-                            <div className="message animate-fade-in message-user">
-                                <div className="message-label">You</div>
-                                <AnimatedMessage
-                                    text={streamingText}
-                                    isUser={true}
-                                    speed={40} // Fast but visible animation for streaming
-                                />
-                            </div>
-                        )}
-
-                        {reversedMessages.map((msg, i) => (
-                            <div
-                                key={messages.length - 1 - i}
-                                className={`message animate-fade-in ${msg.type === 'user' ? 'message-user' : 'message-agent'}`}
-                            >
-                                <div className="message-label">
-                                    {msg.type === 'user' ? 'You' : 'Aeyes.'}
-                                </div>
-                                <AnimatedMessage
-                                    text={msg.text}
-                                    isUser={msg.type === 'user'}
-                                    speed={msg.type === 'user' ? 80 : 250}
-                                    startVisible={msg.type === 'user'} // Instant show for user history (since it was just streamed)
-                                />
-                            </div>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="flex-1 flex items-center justify-center">
-                        {!permissionRequired && (
-                            <p className="text-xs text-[var(--color-text-muted)]">
-                                Say something to start...
-                            </p>
-                        )}
-                    </div>
-                )}
+            {/* Current Plan Display (if any) */}
+            <section className="shrink-0" style={{ minHeight: currentPlan ? 'auto' : '0px' }}>
+                <PlanViewer currentPlan={currentPlan} />
             </section>
+
+            {/* Messages */}
+            <ChatList
+                messages={messages}
+                streamingText={streamingText}
+                permissionRequired={permissionRequired}
+            />
 
             {/* Footer */}
             <footer className="shrink-0 text-center">

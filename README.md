@@ -96,10 +96,11 @@ npm run build
 ```
 ai-partner-catalyst/
 ├── backend/
-│   ├── .env                      # YOUR secrets (create this)
+│   ├── .env                      # YOUR secrets
 │   ├── .env.example              # Template
-│   ├── service-account-key.json  # YOUR GCP key (place here)
-│   └── main.py
+│   ├── service-account-key.json  # YOUR GCP key
+│   ├── main.py                   # Entry point
+│   └── app/                      # App logic
 ├── extension/
 │   ├── .env                      # Optional config
 │   ├── .env.example              # Template
