@@ -151,7 +151,8 @@ export default function VoiceAgent({
         setIsPaused,
         stoppedManuallyRef,
         hasGreeted,
-        playGreeting
+        playGreeting,
+        onClearPlan: onClearPlan || (() => { })
     });
 
 

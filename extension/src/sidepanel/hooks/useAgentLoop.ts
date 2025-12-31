@@ -97,6 +97,9 @@ export function useAgentLoop(
                 isStandbyRef.current = true;
                 controls.stoppedManuallyRef.current = false;
 
+                // Clear the plan when entering standby
+                callbacksRef.current.onClearPlan();
+
                 await playMuteSound();
                 const visSuccess = await callbacksRef.current.startAudioVisualization();
                 if (visSuccess) {

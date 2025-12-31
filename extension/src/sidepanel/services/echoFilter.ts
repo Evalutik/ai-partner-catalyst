@@ -21,14 +21,12 @@ export function normalizeText(text: string): string {
  * @param spokenText - Text that was previously spoken by AI
  * @returns true if input appears to be echo of spoken text
  */
-export function isEchoOfSpokenText(inputText: string, spokenText: string): boolean {
-    if (!inputText || !spokenText) return false;
-
-    const cleanInput = normalizeText(inputText);
-    const cleanSpoken = normalizeText(spokenText);
-
-    // Check if input is a substring of what was spoken (echo)
-    return cleanSpoken.includes(cleanInput);
+export function isEchoOfSpokenText(_inputText: string, _spokenText: string): boolean {
+    // DISABLED: This filter was too aggressive and incorrectly blocked valid user responses
+    // that happened to be substrings of the AI's speech (e.g., "the first video" when AI asked
+    // "Would you like me to play the first video?").
+    // Modern TTS with headphones doesn't cause self-hearing issues.
+    return false;
 }
 
 /**

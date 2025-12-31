@@ -3,6 +3,10 @@ import { ExtractedElement, DOMSnapshot, PageStructure } from '../../types';
 const AEYES_ID_ATTR = 'data-aeyes-id';
 let elementCounter = 0;
 
+// Element cache - stores DOM node references by ID
+// This survives DOM re-renders where attributes might be lost
+const elementCache = new Map<string, HTMLElement>();
+
 export function isVisible(el: HTMLElement): boolean {
     if (!el) return false;
     const style = window.getComputedStyle(el);
@@ -15,11 +19,14 @@ export function isVisible(el: HTMLElement): boolean {
 }
 
 export function getAeyesId(el: HTMLElement): string {
+    // Check if element is already in cache (by checking if it has the attribute)
     if (el.hasAttribute(AEYES_ID_ATTR)) {
         return el.getAttribute(AEYES_ID_ATTR)!;
     }
     const id = `el-${elementCounter++}`;
     el.setAttribute(AEYES_ID_ATTR, id);
+    // Store reference in cache
+    elementCache.set(id, el);
     return id;
 }
 
@@ -40,13 +47,33 @@ export function getAssociatedLabel(el: HTMLElement): string | undefined {
 }
 
 export function findElementById(elementId: string): HTMLElement | null {
-    return document.querySelector(`[${AEYES_ID_ATTR}="${elementId}"]`);
+    // Strategy 1: Check cache first (survives DOM re-renders)
+    const cached = elementCache.get(elementId);
+    if (cached && document.body.contains(cached)) {
+        return cached;
+    }
+
+    // Strategy 2: Fallback to data attribute lookup
+    const byAttr = document.querySelector(`[${AEYES_ID_ATTR}="${elementId}"]`) as HTMLElement | null;
+    if (byAttr) {
+        // Update cache with fresh reference
+        elementCache.set(elementId, byAttr);
+        return byAttr;
+    }
+
+    return null;
 }
 
 export function findElementByText(text: string): HTMLElement | null {
     const xpath = `//*[text()='${text}' or contains(text(), '${text}')]`;
     const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
     return result.singleNodeValue as HTMLElement;
+}
+
+// Clear cache when starting fresh extraction (called at start of extractDOM)
+export function clearElementCache(): void {
+    elementCache.clear();
+    elementCounter = 0;
 }
 
 export function scanPage(_maxDepth: number = 2): PageStructure {

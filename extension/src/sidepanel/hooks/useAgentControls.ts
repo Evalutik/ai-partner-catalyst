@@ -16,6 +16,7 @@ interface UseAgentControlsProps {
     stoppedManuallyRef: MutableRefObject<boolean>;
     hasGreeted: boolean;
     playGreeting: () => Promise<void>;
+    onClearPlan: () => void;
 }
 
 export function useAgentControls({
@@ -29,7 +30,8 @@ export function useAgentControls({
     setIsPaused,
     stoppedManuallyRef,
     hasGreeted,
-    playGreeting
+    playGreeting,
+    onClearPlan
 }: UseAgentControlsProps) {
     const handlePauseToggle = useCallback(async () => {
         // Include !hasGreeted so clicking Start triggers greeting when not yet greeted
@@ -62,11 +64,12 @@ export function useAgentControls({
             speaker.stopAudio();
             stopListening();
             resetTranscript();
+            onClearPlan(); // Clear plan when manually stopping
             updateStatus('idle');
 
             playMuteSound();
         }
-    }, [isPaused, hasGreeted, agentLoop, startListening, stopListening, speaker, resetTranscript, updateStatus, setIsPaused, stoppedManuallyRef, playGreeting]);
+    }, [isPaused, hasGreeted, agentLoop, startListening, stopListening, speaker, resetTranscript, updateStatus, setIsPaused, stoppedManuallyRef, playGreeting, onClearPlan]);
 
     return {
         handlePauseToggle

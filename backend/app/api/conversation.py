@@ -110,7 +110,13 @@ async def conversation(request: ConversationRequest):
                 if isinstance(act, dict) and "type" in act:
                     valid_post_analysis.append(Action(type=act["type"], args=act.get("args", {})))
 
-        conv_service.add_message(candidate_id, "assistant", assistant_response)
+        # Store the FULL AI response (actions) in history, not just the empty response field
+        # This is critical for the AI to remember what it did in previous turns
+        history_content = json_lib.dumps({
+            "actions": [{"type": a.type, "args": a.args} for a in valid_actions] if valid_actions else [],
+            "completed": completed_flag
+        })
+        conv_service.add_message(candidate_id, "assistant", history_content)
 
         return ConversationResponse(
             response=assistant_response,
