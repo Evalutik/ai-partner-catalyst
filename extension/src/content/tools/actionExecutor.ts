@@ -11,7 +11,7 @@ export async function executeAction(action: Action): Promise<ActionResult> {
             case 'click':
                 return await actionClick(action.elementId!, action.description);
             case 'type':
-                return actionType(action.elementId!, action.value!);
+                return actionType(action.elementId!, action.value!, action.submit);
             case 'scroll':
                 return actionScroll(action.value);
             case 'navigate':

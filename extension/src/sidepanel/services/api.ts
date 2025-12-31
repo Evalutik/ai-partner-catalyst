@@ -27,10 +27,12 @@ export interface Action {
 }
 
 export interface ConversationResponse {
-    response: string;
+    response?: string; // Optional - speech via say/ask actions
     audioUrl?: string;
     actions?: Action[];
-    requiresFollowUp?: boolean;
+    post_analysis?: Action[];
+    requiresFollowUp?: boolean; // Deprecated - inferred from action types
+    completed?: boolean; // Explicit completion flag
     conversation_id?: string;
 }
 

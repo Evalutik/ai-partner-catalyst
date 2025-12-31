@@ -61,7 +61,7 @@ export function actionClick(elementId: string, description?: string): Promise<Ac
     });
 }
 
-export function actionType(elementId: string, text: string): ActionResult {
+export function actionType(elementId: string, text: string, submit: boolean = false): ActionResult {
     const el = findElementById(elementId) as HTMLInputElement;
     if (!el) return { success: false, message: `Element ${elementId} not found` };
     if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') return { success: false, message: `Element ${elementId} is not an input field` };
@@ -70,6 +70,19 @@ export function actionType(elementId: string, text: string): ActionResult {
     el.value = text;
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
+
+    if (submit) {
+        // Try form submission first
+        if (el.form) {
+            el.form.requestSubmit();
+            return { success: true, message: `Typed "${text}" and submitted form` };
+        } else {
+            // Fallback: Press Enter
+            el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+            return { success: true, message: `Typed "${text}" and pressed Enter` };
+        }
+    }
 
     return { success: true, message: `Typed "${text}"` };
 }

@@ -11,7 +11,9 @@ export const domHandler: ActionHandler = {
                 tabId,
                 action.args?.selector,
                 action.args?.limit || 50,
-                action.args?.optimize ?? true
+                // If limit is small (<= 5), assume we want full content (optimize=false)
+                action.args?.optimize ?? ((action.args?.limit || 50) > 5),
+                action.args?.offset || 0
             );
             return { success: true, lastDom: dom || undefined };
         }

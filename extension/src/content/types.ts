@@ -16,6 +16,7 @@ export interface DOMSnapshot {
     url: string;
     title: string;
     elements: ExtractedElement[];
+    selectorMatches?: number;
     message?: string;
 }
 
@@ -25,6 +26,7 @@ export interface Action {
     value?: string;
     waitForPage?: boolean;
     description?: string;
+    submit?: boolean;
 }
 
 export interface ActionResult {

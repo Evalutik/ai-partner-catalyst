@@ -16,7 +16,7 @@ export interface CognitionResult {
 export async function performPerception(): Promise<PerceptionResult> {
     const domContext = await extractDOMWithRetry();
     const pageContext = await capturePageContext();
-    const isProtected = pageContext?.url?.startsWith('chrome://') || pageContext?.url?.startsWith('edge://');
+    const isProtected = pageContext?.url?.startsWith('chrome://') || pageContext?.url?.startsWith('edge://') || false;
 
     return { domContext, pageContext, isProtected };
 }
@@ -46,5 +46,5 @@ export async function performActionExecution(
     signal?: AbortSignal
 ): Promise<ActionResult> {
     // We pass signal implicitly via callbacks.speak usually, but here we just delegate
-    return await executeActions(actions, callbacks);
+    return await executeActions(actions, callbacks, signal);
 }

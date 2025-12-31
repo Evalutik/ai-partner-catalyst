@@ -80,16 +80,16 @@ export function useAgentLoop(
     const processTranscriptWrapper = useCallback(async (text: string) => {
         await processor.processTranscript(text);
 
+        // If we're waiting for user input (ask action), don't enter standby
+        // Use ref for synchronous check (state updates are async)
+        if (processor.waitingForInputRef.current) {
+            console.log('[Aeyes] Waiting for user input, skipping standby');
+            return;
+        }
+
         // After processing check if we should enter standby
-        // Logic copied from original:
-        // Enter Standby Mode
+        // Only enter standby when task is complete (not waiting for input)
         if (!controls.isPausedRef.current && !controls.stoppedManuallyRef.current) {
-            // We need to wait a bit? processor finishes speaking before returning.
-
-            // Check if processing was successful (if it wasn't, processor sets status to idle)
-            // Ideally we'd know if it was a "success" or "action failure".
-            // But let's assume if we are here, we are done.
-
             await new Promise(r => setTimeout(r, 1000));
 
             if (!controls.stoppedManuallyRef.current && !controls.isPausedRef.current) {

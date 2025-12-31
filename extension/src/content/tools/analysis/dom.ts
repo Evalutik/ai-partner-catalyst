@@ -61,59 +61,134 @@ export function scanPage(_maxDepth: number = 2): PageStructure {
     };
 }
 
-export function extractDOM(selector: string = 'body', limit: number = 50, optimize: boolean = true): DOMSnapshot {
-    const root = document.querySelector(selector) as HTMLElement;
-    if (!root) return { url: window.location.href, title: document.title, elements: [], message: 'Root element not found' };
+// Helper to extract data from a single element
+function parseElement(el: HTMLElement, optimize: boolean = true): ExtractedElement {
+    const text = el.textContent?.trim() || '';
 
-    const elements: ExtractedElement[] = [];
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
-        acceptNode: (node) => {
-            const el = node as HTMLElement;
-            if (!isVisible(el)) return NodeFilter.FILTER_REJECT;
-            // Interactive or informative elements
-            if (['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA', 'H1', 'H2', 'H3', 'P', 'LI', 'SPAN', 'DIV', 'IMG'].includes(el.tagName)) {
-                return NodeFilter.FILTER_ACCEPT;
-            }
-            return NodeFilter.FILTER_SKIP;
+    // Only truncate if optimizing AND text is very long
+    // If not optimized (e.g. specific fetch), keep full text for reading
+    const shouldTruncate = optimize && text.length > 300;
+
+    const extracted: ExtractedElement = {
+        id: getAeyesId(el),
+        tagName: el.tagName.toLowerCase(),
+        text: shouldTruncate ? text.substring(0, 300) + '...' : text,
+        truncated: shouldTruncate
+    };
+
+    const isInteractive = ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName) || el.onclick || el.getAttribute('role') === 'button';
+
+    if (isInteractive) extracted.type = (el as any).type;
+    if (el.getAttribute('role')) extracted.role = el.getAttribute('role')!;
+    if ((el as HTMLInputElement).placeholder) extracted.placeholder = (el as HTMLInputElement).placeholder;
+    if ((el as HTMLImageElement).alt) extracted.alt = (el as HTMLImageElement).alt;
+    if ((el as HTMLInputElement).value) extracted.value = (el as HTMLInputElement).value;
+    if ((el as HTMLInputElement).checked) extracted.checked = (el as HTMLInputElement).checked;
+
+    const label = getAssociatedLabel(el);
+    if (label) extracted.label = label;
+
+    return extracted;
+}
+
+export function extractDOM(selector: string = 'body', limit: number = 50, optimize: boolean = true, offset: number = 0): DOMSnapshot {
+    let elements: ExtractedElement[] = [];
+    const containerTags = ['BODY', 'MAIN', 'SECTION', 'ARTICLE', 'DIV', 'ASIDE', 'HEADER', 'FOOTER', 'NAV', 'FORM'];
+
+    // Check what the selector targets
+    const candidates = Array.from(document.querySelectorAll(selector));
+
+    // Store total count for pagination support
+    const selectorMatches = candidates.length;
+
+    // DECISION: Treat as Scope (Root) OR List of Items?
+    // Treat as Scope if:
+    // 1. Only 1 element found AND
+    // 2. It's a container tag AND
+    // 3. It's not a generic 'a, button' selector that just happened to match 1 item
+    // (Rough heuristic: containers usually don't match list selectors like 'a', 'h1')
+
+    const isSingleMatch = candidates.length === 1;
+    let root: HTMLElement | null = null;
+
+    if (isSingleMatch) {
+        const el = candidates[0] as HTMLElement;
+        if (containerTags.includes(el.tagName)) {
+            root = el;
         }
-    });
+    }
 
-    let count = 0;
-    while (walker.nextNode() && count < limit) {
-        const el = walker.currentNode as HTMLElement;
-        const text = el.textContent?.trim() || '';
-        const isInteractive = ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName) || el.onclick || el.getAttribute('role') === 'button';
+    // STRATEGY A: TreeWalker (Scope Mode)
+    // Used if selector targets a container (like #main, body, .content)
+    if (root) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+            acceptNode: (node) => {
+                const el = node as HTMLElement;
+                if (!isVisible(el)) return NodeFilter.FILTER_REJECT;
+                // Interactive or informative elements
+                if (['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA', 'H1', 'H2', 'H3', 'P', 'LI', 'SPAN', 'DIV', 'IMG'].includes(el.tagName)) {
+                    return NodeFilter.FILTER_ACCEPT;
+                }
+                return NodeFilter.FILTER_SKIP;
+            }
+        });
 
-        // Filter out empty non-interactive elements unless they are images
-        if (!isInteractive && !text && el.tagName !== 'IMG') continue;
+        let count = 0;
+        let skipped = 0;
+        while (walker.nextNode() && count < limit) {
+            const el = walker.currentNode as HTMLElement;
+            const text = el.textContent?.trim() || '';
+            const isInteractive = ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName) || el.onclick || el.getAttribute('role') === 'button';
 
-        // Optimization: Skip very short text for massive pages
-        if (optimize && !isInteractive && text.length < 3) continue;
+            // Filter out empty non-interactive elements unless they are images
+            if (!isInteractive && !text && el.tagName !== 'IMG') continue;
 
-        const extracted: ExtractedElement = {
-            id: getAeyesId(el),
-            tagName: el.tagName.toLowerCase(),
-            text: text.substring(0, 100) + (text.length > 100 ? '...' : ''), // Truncate long text
-            truncated: text.length > 100
-        };
+            // Optimization: Skip very short text for massive pages
+            if (optimize && !isInteractive && text.length < 3) continue;
 
-        if (isInteractive) extracted.type = (el as any).type;
-        if (el.getAttribute('role')) extracted.role = el.getAttribute('role')!;
-        if ((el as HTMLInputElement).placeholder) extracted.placeholder = (el as HTMLInputElement).placeholder;
-        if ((el as HTMLImageElement).alt) extracted.alt = (el as HTMLImageElement).alt;
-        if ((el as HTMLInputElement).value) extracted.value = (el as HTMLInputElement).value;
-        if ((el as HTMLInputElement).checked) extracted.checked = (el as HTMLInputElement).checked;
+            // Skip elements until we reach the offset
+            if (skipped < offset) {
+                skipped++;
+                continue;
+            }
 
-        const label = getAssociatedLabel(el);
-        if (label) extracted.label = label;
+            elements.push(parseElement(el, optimize));
+            count++;
+        }
+    }
+    // STRATEGY B: Query Selector List (Filter Mode)
+    // Used for 'h1', 'a', '.search-result', 'button' etc.
+    else {
+        let count = 0;
+        let skipped = 0;
 
-        elements.push(extracted);
-        count++;
+        // If using a specific selector (not 'body'), the AI explicitly wants these elements
+        // even if they are off-screen, so skip visibility check
+        const skipVisibilityCheck = selector !== 'body';
+
+        for (const node of candidates) {
+            if (count >= limit) break;
+
+            const el = node as HTMLElement;
+
+            // Only check visibility for default 'body' selector
+            if (!skipVisibilityCheck && !isVisible(el)) continue;
+
+            // Skip elements until we reach the offset
+            if (skipped < offset) {
+                skipped++;
+                continue;
+            }
+
+            elements.push(parseElement(el, optimize));
+            count++;
+        }
     }
 
     return {
         url: window.location.href,
         title: document.title,
-        elements
+        elements,
+        selectorMatches
     };
 }

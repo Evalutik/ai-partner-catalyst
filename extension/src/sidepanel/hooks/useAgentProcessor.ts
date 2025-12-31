@@ -2,7 +2,196 @@ import { useState, useRef, useCallback, useMemo } from 'react';
 import { SpeakerState } from './useSpeaker';
 import { AgentControlRefs, AgentLoopCallbacks } from './useAgentLoop';
 import { performPerception, performCognition, performActionExecution } from '../services/agentSteps';
-import { checkInfiniteLoop, detectPlanLoop, determineFinalResponse, LoopDetectionState } from './agentProcessorUtils';
+import { checkInfiniteLoop, detectPlanLoop, LoopDetectionState } from './agentProcessorUtils';
+import { playListeningSound } from '../services/audioCues';
+
+// ============================================================================
+// Types
+// ============================================================================
+
+interface PageState {
+    domContext: any;
+    pageContext: any;
+    isProtected: boolean;
+}
+
+interface ConversationContext {
+    signal: AbortSignal;
+    speaker: SpeakerState;
+    callbacks: AgentLoopCallbacks;
+    controls: AgentControlRefs;
+    lastPlanTextRef: React.MutableRefObject<string>;
+    setConversationId: (id: string) => void;
+    setWaitingForInput: (val: boolean) => void;
+    waitingForInputRef: React.MutableRefObject<boolean>;
+    setProcessingState: (val: boolean) => void;
+    resetConversation: () => void;
+}
+
+// ============================================================================
+// Pure Functions
+// ============================================================================
+
+function shouldEndConversation(response: any): boolean {
+    if (!response) return true;
+    const actions = response.actions || [];
+    const isCompleted = response.completed === true;
+    return isCompleted || actions.length === 0;
+}
+
+function getNextTranscript(actionFailed: boolean, failureMessage: string): string {
+    if (actionFailed) {
+        return failureMessage;
+    }
+    return "[Continue task if not finished. When done: use ask() to offer more help. Send empty actions and completed:true if no help is needed.]";
+}
+
+// ============================================================================
+// Main Conversation Loop
+// ============================================================================
+
+async function runConversationLoop(
+    initialTranscript: string,
+    initialConversationId: string | null,
+    ctx: ConversationContext
+): Promise<boolean> { // Returns true if waiting for input, false if completed
+    const MAX_STEPS = 30;
+    const MAX_FAILURES = 3;
+    const MAX_PLAN_REPEATS = 3;
+
+    let transcript = initialTranscript;
+    let conversationId = initialConversationId;
+    let pageState: PageState | null = null;
+    let failureCount = 0;
+    let loopState: LoopDetectionState = { samePlanRepeatCount: 0, lastPlanText: ctx.lastPlanTextRef.current };
+
+    for (let step = 0; step < MAX_STEPS; step++) {
+        if (ctx.controls.stoppedManuallyRef.current || ctx.signal.aborted) break;
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 1. CAPTURE - Get current page state
+        // ═══════════════════════════════════════════════════════════════════
+        if (!pageState) {
+            const perception = await performPerception();
+            const loopWarning = checkInfiniteLoop(step, perception);
+            if (loopWarning) {
+                await ctx.speaker.speak(loopWarning, ctx.signal);
+                break;
+            }
+            pageState = perception;
+        }
+
+        if (ctx.signal.aborted) break;
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 2. SEND - Ask AI what to do
+        // ═══════════════════════════════════════════════════════════════════
+        const cognition = await performCognition(transcript, pageState, conversationId, ctx.signal);
+        const response = cognition.response;
+
+        if (cognition.conversationId && cognition.conversationId !== conversationId) {
+            conversationId = cognition.conversationId;
+            ctx.setConversationId(conversationId);
+        }
+
+        if (ctx.controls.stoppedManuallyRef.current) break;
+
+        // Plan loop detection
+        loopState = detectPlanLoop(response.actions, loopState, MAX_PLAN_REPEATS);
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 3. CHECK - Should we end?
+        // ═══════════════════════════════════════════════════════════════════
+        if (shouldEndConversation(response)) {
+            console.log('[Aeyes] Conversation complete');
+            break;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 4. EXECUTE - Do what AI asked
+        // ═══════════════════════════════════════════════════════════════════
+        const actionResult = await performActionExecution(response.actions, {
+            onPlan: ctx.callbacks.onPlan,
+            onStatusChange: ctx.callbacks.onStatusChange,
+            speak: (t) => ctx.speaker.speak(t, ctx.signal),
+            getLastShownPlan: () => ctx.lastPlanTextRef.current,
+            setLastShownPlan: (p) => { ctx.lastPlanTextRef.current = p; }
+        }, ctx.signal);
+
+        // Post-analysis if any
+        if (actionResult.success && response.post_analysis?.length > 0) {
+            await new Promise(r => setTimeout(r, 500));
+            const postResult = await performActionExecution(response.post_analysis, {
+                speak: (t) => ctx.speaker.speak(t, ctx.signal)
+            });
+            if (postResult.lastDom) {
+                actionResult.lastDom = postResult.lastDom;
+            }
+        }
+
+        if (ctx.controls.stoppedManuallyRef.current) break;
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 5. HANDLE - Process result
+        // ═══════════════════════════════════════════════════════════════════
+
+        // Handle wait for user input (ask action)
+        if (actionResult.waitForInput) {
+            console.log('[Aeyes] Waiting for user input');
+            ctx.setWaitingForInput(true);
+            ctx.waitingForInputRef.current = true;
+
+            // Play cue sound to indicate it's user's turn
+            await playListeningSound();
+
+            await ctx.callbacks.startAudioVisualization();
+            ctx.callbacks.startListening();
+            ctx.callbacks.onStatusChange('listening');
+            ctx.setProcessingState(false);
+            return true; // Return true = waiting for input (early exit)
+        }
+
+        // Handle failure
+        if (!actionResult.success) {
+            failureCount++;
+            if (failureCount >= MAX_FAILURES) {
+                throw new Error(`Failed after ${MAX_FAILURES} attempts: ${actionResult.failReason}`);
+            }
+            console.log('[Aeyes] Action failed:', actionResult.failReason);
+            transcript = `[ACTION_FAILED] I tried to "${actionResult.failedAction}" but it failed: ${actionResult.failReason}. Suggest recovery.`;
+            // Keep same pageState for retry
+            continue;
+        }
+
+        failureCount = 0; // Reset on success
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 6. PREPARE - Get ready for next iteration
+        // ═══════════════════════════════════════════════════════════════════
+
+        // Capture new page state (use AI's analysis if available)
+        if (actionResult.lastDom) {
+            console.log('[Aeyes] Using DOM from AI analysis');
+            const perception = await performPerception();
+            pageState = { domContext: actionResult.lastDom, pageContext: perception.pageContext, isProtected: false };
+        } else {
+            pageState = null; // Will be captured at start of next iteration
+        }
+
+        transcript = getNextTranscript(false, '');
+
+        // Pacing delay
+        await new Promise(r => setTimeout(r, 1500));
+    }
+
+    // Loop ended - cleanup (only if not waiting for input)
+    ctx.resetConversation();
+    return false; // Return false = loop completed normally
+}
+
+// ============================================================================
+// Main Hook
+// ============================================================================
 
 export function useAgentProcessor(
     speaker: SpeakerState,
@@ -11,15 +200,16 @@ export function useAgentProcessor(
 ) {
     const [conversationId, setConversationId] = useState<string | null>(null);
     const [processing, setProcessing] = useState(false);
+    const [waitingForInput, setWaitingForInput] = useState(false);
     const processingRef = useRef(false);
+    const waitingForInputRef = useRef(false);
     const abortControllerRef = useRef<AbortController | null>(null);
     const lastPlanTextRef = useRef<string>('');
 
-    // Sync refs with state
-    const setProcessingState = (val: boolean) => {
+    const setProcessingState = useCallback((val: boolean) => {
         setProcessing(val);
         processingRef.current = val;
-    };
+    }, []);
 
     const cancelRequests = useCallback(() => {
         if (abortControllerRef.current) {
@@ -38,6 +228,9 @@ export function useAgentProcessor(
         if (processingRef.current) return;
         setProcessingState(true);
 
+        // Reset state
+        setWaitingForInput(false);
+        waitingForInputRef.current = false;
         abortControllerRef.current = new AbortController();
         const signal = abortControllerRef.current.signal;
 
@@ -48,165 +241,51 @@ export function useAgentProcessor(
         callbacks.onTranscript(capitalizedText);
         callbacks.onStatusChange('processing');
 
-        const MAX_TOTAL_STEPS = 30;
-        const MAX_CONSECUTIVE_FAILURES = 3;
-        const MAX_SAME_PLAN_REPEATS = 3;
-
-        let stepCount = 0;
-        let consecutiveFailures = 0;
-        const loopState: LoopDetectionState = {
-            samePlanRepeatCount: 0,
-            lastPlanText: lastPlanTextRef.current
+        // Build context
+        const ctx: ConversationContext = {
+            signal,
+            speaker,
+            callbacks,
+            controls,
+            lastPlanTextRef,
+            setConversationId,
+            setWaitingForInput,
+            waitingForInputRef,
+            setProcessingState,
+            resetConversation
         };
-        let currentTranscript = capitalizedText;
-        let finalResponseText = '';
-        let currentConversationId = conversationId;
 
         try {
-            while (stepCount < MAX_TOTAL_STEPS) {
-                if (controls.stoppedManuallyRef.current) break;
-                stepCount++;
+            const isWaitingForInput = await runConversationLoop(capitalizedText, conversationId, ctx);
 
-                // 1. Perception
-                const perception = await performPerception();
-
-                // Loop Safety Check
-                const loopWarning = checkInfiniteLoop(stepCount, perception);
-                if (loopWarning) {
-                    finalResponseText = loopWarning;
-                    break;
-                }
-
-                if (signal.aborted) break;
-
-                // 2. Cognition (Backend)
-                const cognition = await performCognition(
-                    currentTranscript,
-                    perception,
-                    currentConversationId,
-                    signal
-                );
-
-                const response = cognition.response;
-                if (cognition.conversationId) {
-                    currentConversationId = cognition.conversationId;
-                    if (!conversationId) setConversationId(currentConversationId);
-                }
-
-                if (controls.stoppedManuallyRef.current) break;
-
-                // Plan Loop Detection
-                const newLoopState = detectPlanLoop(response.actions, loopState, MAX_SAME_PLAN_REPEATS);
-                // Update local state
-                loopState.samePlanRepeatCount = newLoopState.samePlanRepeatCount;
-                loopState.lastPlanText = newLoopState.lastPlanText;
-
-                // 3. Action Execution
-                let actionResult = { success: true } as any;
-                if (response.actions && response.actions.length > 0) {
-                    actionResult = await performActionExecution(response.actions, {
-                        onPlan: callbacks.onPlan,
-                        onStatusChange: callbacks.onStatusChange,
-                        speak: (t) => speaker.speak(t, signal),
-                        getLastShownPlan: () => lastPlanTextRef.current,
-                        setLastShownPlan: (p) => { lastPlanTextRef.current = p; }
-                    }, signal);
-                }
-
-                // 3b. Post-Analysis
-                if (actionResult.success && response.post_analysis && response.post_analysis.length > 0) {
-                    await new Promise(r => setTimeout(r, 500));
-                    await performActionExecution(response.post_analysis, {
-                        speak: (t) => speaker.speak(t, signal)
-                    });
-                }
-
-                if (controls.stoppedManuallyRef.current) break;
-
-                // 4. Failure Handling
-                if (!actionResult.success) {
-                    consecutiveFailures++;
-                    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-                        throw new Error(`Failed after ${MAX_CONSECUTIVE_FAILURES} attempts: ${actionResult.failReason}`);
-                    }
-                    console.log(`[Aeyes] Action failed:`, actionResult.failReason);
-                    currentTranscript = `[ACTION_FAILED] I tried to "${actionResult.failedAction}" but it failed: ${actionResult.failReason}. Suggest recovery.`;
-                    continue;
-                }
-
-                consecutiveFailures = 0;
-
-                // 5. Follow Up
-                if (response.requiresFollowUp) {
-                    if (response.actions?.length) await new Promise(r => setTimeout(r, 1500));
-                    currentTranscript = "[Continue - analyze the current page and complete the task]";
-                    continue;
-                }
-
-                // 6. Completion
-                finalResponseText = response.response;
-                break;
-            }
-
-            // Cleanup & Respond
-            if (controls.stoppedManuallyRef.current || signal.aborted) {
-                callbacks.onStatusChange('idle');
-                resetConversation(); // Clear plan
-                setProcessingState(false);
-                return;
-            }
-
-            finalResponseText = determineFinalResponse(stepCount, MAX_TOTAL_STEPS, finalResponseText);
-
-            // Speak Final Response
-            await speaker.speak(finalResponseText, signal);
-
-            if (controls.stoppedManuallyRef.current) {
-                resetConversation();
-                return;
-            }
-
-            // Reset for next task
-            resetConversation();
-
-            // Enter Standby (mimicking original logic)
-            if (!controls.isPausedRef.current) {
+            // Post-loop: enter standby (only if NOT waiting for user input)
+            if (!isWaitingForInput && !controls.stoppedManuallyRef.current && !signal.aborted) {
                 await new Promise(r => setTimeout(r, 1000));
-                if (!controls.stoppedManuallyRef.current && !controls.isPausedRef.current) {
-                    // Just return, useAgentLoop handles active->standby if idle
-                } else {
-                    callbacks.onStatusChange('idle');
-                }
-            } else {
                 callbacks.onStatusChange('idle');
             }
-
         } catch (err: any) {
             if (err?.name === 'AbortError') {
                 callbacks.onStatusChange('idle');
                 resetConversation();
-                setProcessingState(false);
-                return;
+            } else {
+                console.error('[Aeyes] Process failed:', err);
+                const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+                await speaker.speak("I'm having trouble. " + errorMsg, signal);
+                callbacks.onStatusChange('idle');
             }
-            console.error('[Aeyes] Process failed:', err);
-            const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-            await speaker.speak("I'm having trouble. " + errorMsg, signal);
-
-            if (!controls.isPausedRef.current && !controls.stoppedManuallyRef.current) {
-                await new Promise(r => setTimeout(r, 1000));
-            }
-            callbacks.onStatusChange('idle');
         } finally {
             setProcessingState(false);
             abortControllerRef.current = null;
         }
-    }, [conversationId, controls, speaker, callbacks, resetConversation]);
+    }, [conversationId, controls, speaker, callbacks, resetConversation, setProcessingState]);
 
     return useMemo(() => ({
         processing,
+        waitingForInput,
+        waitingForInputRef,
         conversationId,
         processTranscript,
         cancelRequests,
         resetConversation
-    }), [processing, conversationId, processTranscript, cancelRequests, resetConversation]);
+    }), [processing, waitingForInput, conversationId, processTranscript, cancelRequests, resetConversation]);
 }

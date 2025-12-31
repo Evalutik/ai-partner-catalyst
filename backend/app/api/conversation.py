@@ -31,7 +31,8 @@ async def conversation(request: ConversationRequest):
     if not user_text:
         return ConversationResponse(
             response="I didn't catch that. Could you repeat?",
-            actions=None
+            actions=None,
+            completed=True
         )
 
     # Get Gemini model/service status
@@ -39,7 +40,8 @@ async def conversation(request: ConversationRequest):
     if not model:
         return ConversationResponse(
             response=f"Gemini not configured. You said: {user_text}",
-            actions=None
+            actions=None,
+            completed=True
         )
 
     candidate_id = request.conversation_id or str(uuid.uuid4())
@@ -87,9 +89,11 @@ async def conversation(request: ConversationRequest):
             cleaned = response_text.replace("```json", "").replace("```", "").strip()
             parsed = json_lib.loads(cleaned)
 
-        assistant_response = parsed.get("response", "I'm on it.")
+        # Note: 'response' field is legacy - frontend uses actions (say/ask) for speech
+        assistant_response = parsed.get("response", "")
         raw_actions = parsed.get("actions", [])
         requires_follow_up = parsed.get("requiresFollowUp", False)
+        completed_flag = parsed.get("completed", False) # Default to False if missing (CONTINUE), but prompt demands it
         raw_post_analysis = parsed.get("post_analysis", [])
 
         # Normalize actions to list of Action objects
@@ -113,6 +117,7 @@ async def conversation(request: ConversationRequest):
             actions=valid_actions,
             post_analysis=valid_post_analysis if valid_post_analysis else None,
             requiresFollowUp=requires_follow_up,
+            completed=completed_flag,
             conversation_id=candidate_id
         )
 
@@ -121,5 +126,6 @@ async def conversation(request: ConversationRequest):
         return ConversationResponse(
             response=f"I had a problem processing that. Error: {str(e)}",
             actions=None,
-            conversation_id=conversation_id
+            completed=True,
+            conversation_id=candidate_id if 'candidate_id' in locals() else None
         )

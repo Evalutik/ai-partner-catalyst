@@ -17,7 +17,12 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (message.type === 'EXTRACT_DOM') {
-            const dom = extractDOM();
+            const dom = extractDOM(
+                (message.selector as string) || 'body',
+                (message.limit as number) || 50,
+                message.optimize !== false,
+                (message.offset as number) || 0
+            );
             // Sidepanel expects { success: true, data: DOMSnapshot }
             sendResponse({
                 success: true,

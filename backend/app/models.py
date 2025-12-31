@@ -29,10 +29,11 @@ class ConversationRequest(BaseModel):
 
 class ConversationResponse(BaseModel):
     """Response body for /conversation endpoint."""
-    response: str
+    response: str | None = None  # Optional - speech now via say/ask actions
     actions: list[Action] | None = None
     post_analysis: list[Action] | None = None  # Tools to run AFTER action completes
-    requiresFollowUp: bool = False
+    requiresFollowUp: bool | None = None  # Deprecated - inferred from action types
+    completed: bool | None = None  # Explicit completion flag
     conversation_id: str | None = None
 
 

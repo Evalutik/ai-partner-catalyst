@@ -8,6 +8,10 @@ export const communicationHandler: ActionHandler = {
         if (text) {
             await speak(text, callbacks);
         }
-        return { success: true };
+        // ask signals the system to wait for user speech input
+        return {
+            success: true,
+            waitForInput: action.type === 'ask'
+        };
     }
 };

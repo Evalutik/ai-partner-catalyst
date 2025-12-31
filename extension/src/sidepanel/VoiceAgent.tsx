@@ -194,9 +194,12 @@ export default function VoiceAgent({
         error,
         transcript,
         agentProcessing: agentLoop.processing,
-        speakerSpeaking: speaker.speakingRef.current,
-        lastSpokenText: speaker.lastSpokenTextRef.current,
-        onProcess: agentLoop.processTranscript,
+        speakerSpeakingRef: speaker.speakingRef, // Pass ref, not current value
+        lastSpokenTextRef: speaker.lastSpokenTextRef, // Pass ref, not current value
+        onProcess: async (text) => {
+            resetTranscript();
+            await agentLoop.processTranscript(text);
+        },
         onRestartListening: startListening
     });
 

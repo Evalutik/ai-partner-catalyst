@@ -6,6 +6,7 @@ export interface DOMSnapshot {
     url: string;
     title: string;
     elements: DOMElement[];
+    selectorMatches?: number;
     message?: string;
 }
 
@@ -29,14 +30,16 @@ export async function extractDOM(
     tabId: number,
     selector?: string,
     limit: number = 50,
-    optimize: boolean = true
+    optimize: boolean = true,
+    offset: number = 0
 ): Promise<DOMSnapshot | null> {
     try {
         const response = await chrome.tabs.sendMessage(tabId, {
             type: 'EXTRACT_DOM',
             selector,
             limit,
-            optimize
+            optimize,
+            offset
         });
 
         if (response?.success && response?.data) {
@@ -46,7 +49,7 @@ export async function extractDOM(
     } catch (e: any) {
         // Try to inject content script
         if (isConnectionError(e.message)) {
-            return await retryWithInjection(tabId, selector, limit, optimize);
+            return await retryWithInjection(tabId, selector, limit, optimize, offset);
         }
         console.warn('[Aeyes] DOM extraction failed:', e.message);
         return null;
@@ -92,7 +95,8 @@ async function retryWithInjection(
     tabId: number,
     selector?: string,
     limit: number = 50,
-    optimize: boolean = true
+    optimize: boolean = true,
+    offset: number = 0
 ): Promise<DOMSnapshot | null> {
     try {
         await chrome.scripting.executeScript({
@@ -105,7 +109,8 @@ async function retryWithInjection(
             type: 'EXTRACT_DOM',
             selector,
             limit,
-            optimize
+            optimize,
+            offset
         });
 
         if (response?.success && response?.data) {

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, MutableRefObject } from 'react';
 import { isEchoOfSpokenText } from '../services/echoFilter';
 import { playDoneSound } from '../services/audioCues';
 
@@ -9,8 +9,8 @@ interface VoiceActivityOptions {
     error: string | null;
     transcript: string;
     agentProcessing: boolean;
-    speakerSpeaking: boolean;
-    lastSpokenText: string | null;
+    speakerSpeakingRef: MutableRefObject<boolean>; // Ref for real-time check
+    lastSpokenTextRef: MutableRefObject<string>;   // Ref for echo detection
     onProcess: (text: string) => Promise<void>;
     onRestartListening: () => void;
 }
@@ -22,8 +22,8 @@ export function useVoiceActivity({
     error,
     transcript,
     agentProcessing,
-    speakerSpeaking,
-    lastSpokenText,
+    speakerSpeakingRef,
+    lastSpokenTextRef,
     onProcess,
     onRestartListening
 }: VoiceActivityOptions) {
@@ -47,7 +47,8 @@ export function useVoiceActivity({
     // Input Processing Logic: Track last activity
     useEffect(() => {
         // Guard: Don't listen if processing or speaking
-        if (status === 'processing' || status === 'speaking' || agentProcessing || speakerSpeaking) return;
+        // Check refs in real-time since they may change during the effect
+        if (status === 'processing' || status === 'speaking' || agentProcessing || speakerSpeakingRef.current) return;
 
         const fullCurrentText = transcript.trim();
 
@@ -60,7 +61,7 @@ export function useVoiceActivity({
             prevTextRef.current = '';
             // Do NOT clear lastSeenTextRef here.
         }
-    }, [transcript, status, agentProcessing, speakerSpeaking]);
+    }, [transcript, status, agentProcessing, speakerSpeakingRef]);
 
     // Robust Silence Detection Loop
     useEffect(() => {
@@ -68,8 +69,8 @@ export function useVoiceActivity({
         if (status !== 'listening') return;
 
         const checkSilence = async () => {
-            // Extra safety guards
-            if (agentProcessing || speakerSpeaking) {
+            // Extra safety guards - check refs for REAL-TIME values
+            if (agentProcessing || speakerSpeakingRef.current) {
                 return;
             }
 
@@ -94,8 +95,9 @@ export function useVoiceActivity({
                 // Reset timestamp IMMEDIATELY to prevent double-firing
                 lastSpeechTimeRef.current = Date.now();
 
-                // Echo check logic
-                if (lastSpokenText && textToProcess && isEchoOfSpokenText(textToProcess, lastSpokenText)) {
+                // Echo check logic - use ref for real-time last spoken text
+                const lastSpoken = lastSpokenTextRef.current;
+                if (lastSpoken && textToProcess && isEchoOfSpokenText(textToProcess, lastSpoken)) {
                     console.log('[Aeyes] Ignored self-hearing (final):', textToProcess);
                     onRestartListeningRef.current(); // Restart to clear
                     lastSeenTextRef.current = ''; // Clear buffer since we consumed it (as echo)
@@ -112,7 +114,7 @@ export function useVoiceActivity({
 
         const interval = setInterval(checkSilence, 200);
         return () => clearInterval(interval);
-    }, [status, agentProcessing, speakerSpeaking, transcript, lastSpokenText]); // Removed callbacks from deps
+    }, [status, agentProcessing, transcript]); // Refs don't need to be deps
 
     // Watchdog
     useEffect(() => {
